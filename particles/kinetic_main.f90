@@ -43,6 +43,8 @@ use mod_coupling_settings, only: use_kin_recomb_global
 use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
+use mod_fluxsurf_avg, only: avg_fluxsurf_list
+use mod_expression
 
 use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
@@ -75,6 +77,10 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
+real*8, allocatable :: Psi_list(:), avg_vals(:)
+type(t_expr_list) :: T
+logical :: flux_av
+integer :: ierr
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -256,7 +262,19 @@ do while (.not. sim%stop_now)
     write(*,*) "tstep_fluid_si : ",sim%tstep_fluid_si
   endif
 
+  Psi_list = [ (ES%Psi_axis + i*(ES%Psi_bnd - ES%Psi_axis)/99, i=0,99) ] ! hardcoded for now, but should be the same as the one used for the kinetic profiles in mod_initialise_particles
+  allocate(avg_vals(size(Psi_list)))
+  avg_vals = 0.d0
 
+  T%n_expr = 1
+  T%expr(1)%name = 'T'
+  T%expr(1)%descr = 'Temperature'
+  T%expr(1)%domain = 'cells'
+
+  ierr = 0
+  flux_av = .true.
+
+  call avg_fluxsurf_list(sim%fields%node_list, sim%fields%element_list, T, Psi_list, avg_vals, flux_av, ierr)
   ! --- Interactions that happen on the fluid timestep (creating kinetic particles)
 
   if (n_wall_act_groups > 0) then

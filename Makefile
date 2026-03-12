@@ -95,7 +95,8 @@ DIRS := diagnostics				\
 	core					\
 	core/tests                      	\
 	.					\
-	vacuum
+	vacuum \
+	dream_utilities
 
 DIRS+=$(EXTRA_DIRS) # Specified in Makefile.inc or commandline
 
