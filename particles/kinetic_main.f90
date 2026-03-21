@@ -46,6 +46,7 @@ use mod_output_file_routines, only: write_to_outputfile
 use mod_fluxsurf_avg, only: avg_fluxsurf_list
 use mod_fluxsurf_compute, only: fluxsurface
 use mod_computeB, only: comp_B_field
+use mod_save_flux_hdf5
 use mod_expression
 
 use phys_module, only: index_now
@@ -302,6 +303,16 @@ if (sim%my_id == 0) then
   print *, Bz_mat(:,1)
   print *, "Bphi_mat"
   print *, Bphi_mat(:,1)
+
+  print *, "Saving data to flux_surfaces.h5..."
+    
+  call save_flux_data_h5("flux_surfaces.h5", &
+                          Psi_list, theta_list, &
+                          R_mat, Z_mat, &
+                          Br_mat, Bz_mat, Bphi_mat, &
+                          ES%R_axis, ES%Z_axis)
+                          
+  print *, "HDF5 file written successfully."
 endif
 
 
