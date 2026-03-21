@@ -44,6 +44,8 @@ use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
 use mod_fluxsurf_avg, only: avg_fluxsurf_list
+use mod_fluxsurf_compute, only: fluxsurface
+use mod_computeB, only: comp_B_field
 use mod_expression
 
 use phys_module, only: index_now
@@ -77,10 +79,11 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
-real*8, allocatable :: Psi_list(:), avg_vals(:)
-type(t_expr_list) :: T
+real*8, allocatable :: Psi_list(:), avg_vals(:), R_mat(:,:), Z_mat(:,:)
+real*8, allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
 logical :: flux_av
 integer :: ierr
+logical :: do_avg
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -247,6 +250,60 @@ if(sim%lcm_inner_loop == -9999991) sim%lcm_inner_loop = 1
 
 sim%istep_fluid = 0
 call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.false.,next_block_write_timing=.false.) ! next_block_write_...=.false. because this is only a header, not the announcement of some action, so we don't want to time or write particle conservation for the "content" of this block as there is no content
+
+Psi_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
+
+do_avg = .false.
+ierr = 0
+
+! Averaging still not fully good, needs work
+if (sim%my_id == 0 .and. do_avg) then
+  print *, "Psi_list:"
+  print *, Psi_list
+  allocate(avg_vals(size(Psi_list)))
+  avg_vals = 0.d0
+  flux_av = .true.
+
+  call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, avg_vals, flux_av, ierr)
+
+  print *, "Averaged values:"
+  print *, avg_vals
+  print*, "size avg values"
+  print*, size(avg_vals)
+endif
+
+
+if (sim%my_id == 0) then
+  ! compute R and Z values for the fluxsurfaces in Psi_list
+  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, R_mat, Z_mat, ierr )
+
+  print *, "R and Z for first flux surface"
+  print *, "Psi list 1"
+  print *, Psi_list(1)
+  print *, "R_mat"
+  print *, R_mat(:,1)
+  print *, "Z_mat"
+  print *, Z_mat(:,1)
+
+  ! Commands to determine magnetic axis
+  print *, "R and Z coordinates of magnetic axis"
+  print *, ES%R_axis
+  print *, ES%Z_axis
+
+  ! Compute B-field components for the flux-surfaces selected previously
+  call comp_B_field(ES, sim%fields%node_list, sim%fields%element_list, R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, ierr)
+
+  print *, "B-field for first flux surface"
+  print *, "Br_mat"
+  print *, Br_mat(:,1)
+  print *, "Bz_mat"
+  print *, Bz_mat(:,1)
+  print *, "Bphi_mat"
+  print *, Bphi_mat(:,1)
+endif
+
+
+
 do while (.not. sim%stop_now)
   sim%istep_fluid = sim%istep_fluid + 1
   write(header_line,'(A,I6)') "Starting main loop iteration sim%istep_fluid = ",sim%istep_fluid
@@ -262,19 +319,6 @@ do while (.not. sim%stop_now)
     write(*,*) "tstep_fluid_si : ",sim%tstep_fluid_si
   endif
 
-  Psi_list = [ (ES%Psi_axis + i*(ES%Psi_bnd - ES%Psi_axis)/99, i=0,99) ] ! hardcoded for now, but should be the same as the one used for the kinetic profiles in mod_initialise_particles
-  allocate(avg_vals(size(Psi_list)))
-  avg_vals = 0.d0
-
-  T%n_expr = 1
-  T%expr(1)%name = 'T'
-  T%expr(1)%descr = 'Temperature'
-  T%expr(1)%domain = 'cells'
-
-  ierr = 0
-  flux_av = .true.
-
-  call avg_fluxsurf_list(sim%fields%node_list, sim%fields%element_list, T, Psi_list, avg_vals, flux_av, ierr)
   ! --- Interactions that happen on the fluid timestep (creating kinetic particles)
 
   if (n_wall_act_groups > 0) then
