@@ -18,7 +18,7 @@ module mod_fluxsurf_compute
 
 contains
 
-  subroutine fluxsurface(ES, node_list, element_list, psi_list, R_mat, Z_mat, ierr)
+  subroutine fluxsurface(ES, node_list, element_list, psi_list, R_mat, Z_mat, theta_list, ierr)
   
     ! --- Routine parameters
     type(t_equil_state), intent(in)      :: ES
@@ -28,9 +28,10 @@ contains
     integer, intent(out)                 :: ierr          !< Error flag
     real*8, allocatable, intent(out)     :: R_mat(:,:)    !< Output Matrix (Points, Psi_Index)
     real*8, allocatable, intent(out)     :: Z_mat(:,:)    !< Output Matrix (Points, Psi_Index)
+    real*8, allocatable, intent(out)     :: theta_list(:)    !< Output Matrix (Points, Psi_Index)
     
     ! --- Local variables
-    integer :: i, j, k, i_elm, ip, nplot, n_psi, i_pt, max_pieces
+    integer :: i, j, k, i_elm, ip, nplot, n_psi, i_pt, max_pieces, n_theta
     type (type_surface_list) :: surface_list
     real*8 :: u, si, dsi, ti, dti, target_psi
     real*8 :: R, R_s, R_t, R_st, R_ss, R_tt
@@ -40,7 +41,6 @@ contains
     ierr = 0
     n_psi = size(psi_list)
     nplot = 5  ! Number of plot points per segment
-
     ! Validate Input
     if (any(psi_list < 0.0d0) .or. any(psi_list > 1.0d0)) then
         write(*,*) 'Error: All target psi values must be between 0 and 1.'
@@ -109,6 +109,25 @@ contains
             end do
         end do
     end do
+
+    n_theta = size(R_mat,1)
+    allocate(theta_list(n_theta))
+
+    do i = 1, n_theta
+        if (R_mat(i,1) /= 0.0d0) then
+            ! atan2 returns values in range (-pi, pi]
+            theta_list(i) = atan2(Z_mat(i,1) - ES%Z_axis, R_mat(i,1) - ES%R_axis)
+            
+            ! Convert to [0, 2*pi) range
+            if (theta_list(i) < 0.0d0) then
+                theta_list(i) = theta_list(i) + 2.0d0 * 3.141592653589793
+            endif
+        else
+            theta_list(i) = 0.0d0
+        endif
+    end do
+
+
 
     ! 6. Clean up internal surface_list
     if (allocated(surface_list%psi_values)) deallocate(surface_list%psi_values)

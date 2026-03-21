@@ -79,7 +79,7 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
-real*8, allocatable :: Psi_list(:), avg_vals(:), R_mat(:,:), Z_mat(:,:)
+real*8, allocatable :: Psi_list(:), avg_vals(:), R_mat(:,:), Z_mat(:,:), theta_list(:)
 real*8, allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
 logical :: flux_av
 integer :: ierr
@@ -275,11 +275,13 @@ endif
 
 if (sim%my_id == 0) then
   ! compute R and Z values for the fluxsurfaces in Psi_list
-  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, R_mat, Z_mat, ierr )
+  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, R_mat, Z_mat, theta_list, ierr )
 
   print *, "R and Z for first flux surface"
   print *, "Psi list 1"
   print *, Psi_list(1)
+  print *, "theta_list"
+  print *, theta_list
   print *, "R_mat"
   print *, R_mat(:,1)
   print *, "Z_mat"
