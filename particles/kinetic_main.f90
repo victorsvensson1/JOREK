@@ -80,7 +80,8 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
-real*8, allocatable :: Psi_list(:), avg_vals(:), R_mat(:,:), Z_mat(:,:), theta_list(:)
+real*8, allocatable :: Psi_list(:), avg_vals(:,:), R_mat(:,:), Z_mat(:,:), theta_list(:)
+real*8, allocatable :: result(:,:)
 real*8, allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
 logical :: flux_av
 integer :: ierr
@@ -254,24 +255,24 @@ call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.fals
 
 Psi_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
 
-do_avg = .false.
+do_avg = .true.
+
 ierr = 0
 
 ! Averaging still not fully good, needs work
 if (sim%my_id == 0 .and. do_avg) then
   print *, "Psi_list:"
   print *, Psi_list
-  allocate(avg_vals(size(Psi_list)))
+  !allocate(avg_vals(size(Psi_list)))
   avg_vals = 0.d0
   flux_av = .true.
 
   call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, avg_vals, flux_av, ierr)
+  call save_avg_quantities_h5("flux_averages.h5", Psi_list, avg_vals)
 
-  print *, "Averaged values:"
-  print *, avg_vals
-  print*, "size avg values"
-  print*, size(avg_vals)
+
 endif
+
 
 
 if (sim%my_id == 0) then

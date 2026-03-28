@@ -9,6 +9,7 @@ module mod_fluxsurf_avg
     use mod_diag_output
     use equil_info
     use settings
+    use constants
     implicit none
 
     real*8, allocatable, private, save :: result(:,:,:,:), res1d(:,:)
@@ -32,20 +33,20 @@ contains
     type(type_element_list), intent(in) :: element_list
     real*8, intent(in) :: psi_list(:)
     integer, intent(out) :: ierr
-    real*8, allocatable, intent(out) :: avg_vals(:)
+    real*8, allocatable, intent(out) :: avg_vals(:,:)
     logical, optional, intent(in) :: flux_av     !< Perform proper flux average
 
     ! --- Local variables
     integer :: units, npts, nsmall, i_exp, nmaxstep, NTht, n_plane
     real*8  :: deltaphi, PsiNmin, PsiNmax
-    character(len=1024) :: filename, comment
     type(t_pol_pos_list), save :: pol_pos_list
     type(t_tor_pos_list), save :: tor_pos_list
     type(t_expr_list) :: expr_list
-    character(len=16)  :: tmp_name
-    character(len=128) :: tmp_desc
+    character(len=16)  :: name_T, name_ne, name_Epar
+    character(len=128) :: desc_T, desc_ne, desc_Epar
+    real*8 :: conv_ne, conv_T, conv_E
     
-    units    = get_int_setting('units', ierr)
+    !units    = get_int_setting('units', ierr)
     n_plane = 4 !hardcoded for now, CHANGE!
     npts = size(Psi_list)
     nsmall = 3
@@ -54,19 +55,21 @@ contains
     PsiNmin = Psi_list(1)
     PsiNmax = Psi_list(size(Psi_list))
     nTht = max(150,6*n_plane)
+    
+    name_T = 'T'
+    name_ne = 'ne'
+    name_Epar = 'E_||'
+    desc_T = 'temperature'
+    desc_ne = 'ne'
+    desc_Epar = 'parallel E field'
 
-    !expr_list%n_expr = 1
-    !expr_list%expr(1)%name = 'T'
-    !expr_list%expr(1)%descr = 'Temperature'
-    !expr_list%expr(1)%domain = 'cells'
+    call add(expr_list, name_T, desc_T)
+    call add(expr_list, name_ne, desc_ne)
+    call add(expr_list, name_Epar, desc_Epar)
 
-    tmp_name = 'T'
-    tmp_desc = 'major radius'
-    call add(expr_list, tmp_name, tmp_desc)
     if (present(flux_av)) then
       call add(expr_list, 'unity       ', 'Just unity, used to get R^2 average                   ')
     endif
-    
 
     pol_pos_list = pol_pos(node_list, element_list, ES, nPsiN=npts, nTht=nTht, nsmallsteps=nsmall, nmaxsteps=nmaxstep, deltaphi=deltaphi, PsiNmax=PsiNmax, PsiNmin=PsiNmin )
     tor_pos_list = tor_pos(nphi=max(n_plane,2))
@@ -75,8 +78,6 @@ contains
     call apply_four_filter(result, simple_filter(m=0,n=0), expr_list%n_coord, ierr)
     call reduce_result_to_1d(ierr, result, res1d, i1=1, i2=1)
 
-    print *, res1d(:,1)
-    print *, res1d(:,2)
 
     if (present(flux_av)) then 
       if (flux_av) then
@@ -86,10 +87,17 @@ contains
       endif      
     endif
 
+    conv_T = 1.d0 / ( MU_zero * central_density * 1.d20 * EL_CHG )
+    conv_ne = 1.d20
+    conv_E = 1.d-1 / sqrt(MU_zero*central_density *1.d20 * central_mass * ATOMIC_MASS_UNIT) !1.d1 instead of 1.d0 gives me right order of magnitude
+    res1d(:,1) = res1d(:,1) * conv_T
+    res1d(:,2) = res1d(:,2) * conv_ne
+    res1d(:,3) = res1d(:,3) * conv_E
 
 
-    allocate( avg_vals(size(res1d,1)) )
-    avg_vals = res1d(:,1)
+
+    allocate( avg_vals(size(res1d,1), size(res1d,2)) )
+    avg_vals = res1d
     
     end subroutine avg_fluxsurf_list
     
