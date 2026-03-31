@@ -48,6 +48,8 @@ use mod_fluxsurf_compute, only: fluxsurface
 use mod_computeB, only: comp_B_field
 use mod_save_flux_hdf5
 use mod_expression
+use mod_fluxsurf_evol, only: initialise_on_flux_surfaces, run_particle_trace
+use mod_particle_types, only: particle_fieldline
 
 use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
@@ -80,12 +82,17 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
-real*8, allocatable :: Psi_list(:), avg_vals(:,:), R_mat(:,:), Z_mat(:,:), theta_list(:)
+real*8, allocatable :: Psi_list(:), PsiN_list(:), avg_vals(:,:), R_mat(:,:), Z_mat(:,:), theta_list(:)
 real*8, allocatable :: result(:,:)
 real*8, allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
 logical :: flux_av
 integer :: ierr
 logical :: do_avg
+real*8, allocatable :: timesteps(:)
+real*8 :: end_time
+type(event), allocatable :: events_list(:)
+integer :: dims_RZ(2)
+integer :: s, idx, k
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -253,7 +260,12 @@ if(sim%lcm_inner_loop == -9999991) sim%lcm_inner_loop = 1
 sim%istep_fluid = 0
 call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.false.,next_block_write_timing=.false.) ! next_block_write_...=.false. because this is only a header, not the announcement of some action, so we don't want to time or write particle conservation for the "content" of this block as there is no content
 
-Psi_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
+PsiN_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
+
+allocate(Psi_list(size(PsiN_list)))
+do k = 1, size(PsiN_list)
+    Psi_list(k) = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
+end do
 
 do_avg = .true.
 
@@ -267,8 +279,8 @@ if (sim%my_id == 0 .and. do_avg) then
   avg_vals = 0.d0
   flux_av = .true.
 
-  call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, avg_vals, flux_av, ierr)
-  call save_avg_quantities_h5("flux_averages.h5", Psi_list, avg_vals)
+  call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, avg_vals, flux_av, ierr)
+  call save_avg_quantities_h5("flux_averages.h5", PsiN_list, avg_vals)
 
 
 endif
@@ -277,33 +289,14 @@ endif
 
 if (sim%my_id == 0) then
   ! compute R and Z values for the fluxsurfaces in Psi_list
-  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, Psi_list, R_mat, Z_mat, theta_list, ierr )
+  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, R_mat, Z_mat, theta_list, ierr )
 
-  print *, "R and Z for first flux surface"
-  print *, "Psi list 1"
-  print *, Psi_list(1)
-  print *, "theta_list"
-  print *, theta_list
-  print *, "R_mat"
-  print *, R_mat(:,1)
-  print *, "Z_mat"
-  print *, Z_mat(:,1)
+  dims_RZ(1) = size(R_mat, 1) ! n_theta
+  dims_RZ(2) = size(R_mat, 2) ! n_psi
 
-  ! Commands to determine magnetic axis
-  print *, "R and Z coordinates of magnetic axis"
-  print *, ES%R_axis
-  print *, ES%Z_axis
 
   ! Compute B-field components for the flux-surfaces selected previously
   call comp_B_field(ES, sim%fields%node_list, sim%fields%element_list, R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, ierr)
-
-  print *, "B-field for first flux surface"
-  print *, "Br_mat"
-  print *, Br_mat(:,1)
-  print *, "Bz_mat"
-  print *, Bz_mat(:,1)
-  print *, "Bphi_mat"
-  print *, Bphi_mat(:,1)
 
   print *, "Saving data to flux_surfaces.h5..."
     
@@ -311,7 +304,7 @@ if (sim%my_id == 0) then
                           Psi_list, theta_list, &
                           R_mat, Z_mat, &
                           Br_mat, Bz_mat, Bphi_mat, &
-                          ES%R_axis, ES%Z_axis)
+                          ES%R_axis, ES%Z_axis, ES%LCFS_a)
                           
   print *, "HDF5 file written successfully."
 endif
