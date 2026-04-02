@@ -265,6 +265,7 @@ PsiN_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
 allocate(Psi_list(size(PsiN_list)))
 do k = 1, size(PsiN_list)
     Psi_list(k) = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
+    Psi_list(k) = -Psi_list(k) !flip sign for dream
 end do
 
 do_avg = .true.

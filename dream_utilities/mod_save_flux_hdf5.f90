@@ -17,6 +17,8 @@ contains
         integer :: ierr, n_pts, n_psi
         real*8, allocatable :: ptx(:,:), pty(:,:), psi_apRp(:)
         real*8 :: aspect_scale
+        character(len=128) :: id_string
+        id_string = 'Equilibrium Data from JOREK'
 
         ierr = 0
         n_pts = size(R, 1)
@@ -40,6 +42,8 @@ contains
 
         ! 2. Create the "equil" group
         call HDF5_group_create(i_file, 'equil'//char(0), i_group)
+
+        call HDF5_char_saving(i_group, trim(id_string)//char(0), 'id'//char(0))
 
         ! 3. Save Scalars under group
         call HDF5_real_saving(i_group, R_ax, 'Rp'//char(0))

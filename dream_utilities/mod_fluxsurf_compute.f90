@@ -37,10 +37,11 @@ contains
     real*8 :: R, R_s, R_t, R_st, R_ss, R_tt
     real*8 :: Z, Z_s, Z_t, Z_st, Z_ss, Z_tt
     real*8 :: ss1, dss1, ss2, dss2, tt1, dtt1, tt2, dtt2
+    real*8 :: offset
 
     ierr = 0
     n_psi = size(psi_list)
-    nplot = 5  ! Number of plot points per segment
+    nplot = 7  ! Number of plot points per segment
     ! Validate Input
     if (any(psi_list < 0.0d0) .or. any(psi_list > 1.0d0)) then
         write(*,*) 'Error: All target psi values must be between 0 and 1.'
@@ -67,8 +68,8 @@ contains
     end do
 
     ! Allocate matrices: Rows = Total Points, Cols = Which Psi
-    allocate(R_mat(max_pieces * nplot, n_psi), stat=ierr)
-    allocate(Z_mat(max_pieces * nplot, n_psi), stat=ierr)
+    allocate(R_mat(max_pieces * (nplot -1) + 1, n_psi), stat=ierr)
+    allocate(Z_mat(max_pieces * (nplot -1) + 1, n_psi), stat=ierr)
     
     ! Initialize with 0.0 or NaN in case some surfaces have fewer pieces than max_pieces
     R_mat = 0.0d0
@@ -93,7 +94,7 @@ contains
             dtt2 = surface_list%flux_surfaces(k)%t(4,j)
 
             ! Interpolate points along the segment
-            do ip = 1, nplot
+            do ip = 1, nplot - 1
                 u = -1.0d0 + 2.0d0 * real(ip-1, 8) / real(nplot-1, 8)
                 
                 call CUB1D(ss1, dss1, ss2, dss2, u, si, dsi)
@@ -108,6 +109,15 @@ contains
                 Z_mat(i_pt, k) = Z
             end do
         end do
+
+        if (i_pt > 0) then
+            i_pt = i_pt + 1
+            if (i_pt <= size(R_mat, 1)) then
+                R_mat(i_pt, k) = R_mat(1, k)
+                Z_mat(i_pt, k) = Z_mat(1, k)
+            endif
+        endif
+
     end do
 
     n_theta = size(R_mat,1)
@@ -127,9 +137,22 @@ contains
         endif
     end do
 
+    ! Shift theta_list so that the first element is zero, needed for DREAM input
+    offset = theta_list(1)
+    do i = 1, n_theta
+        theta_list(i) = theta_list(i) - offset  ! Shift so that the first element is zero
+        
+        ! Optional: Ensure values stay within [0, 2pi] 
+        ! if the shift pushed any values below 0
+        if (theta_list(i) < 0.0d0) then
+            theta_list(i) = theta_list(i) + 2.0d0 * 3.141592653589793d0
+        endif
+    end do
 
+    !ensure the first and last values of theta_list are exactly 0 and 2*pi for DREAM input
+    theta_list(1) = 0.0d0
+    theta_list(n_theta) = 2.0d0 * 3.141592653589793d0
 
-    ! 6. Clean up internal surface_list
     if (allocated(surface_list%psi_values)) deallocate(surface_list%psi_values)
 
   end subroutine fluxsurface
