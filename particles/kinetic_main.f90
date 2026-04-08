@@ -271,13 +271,12 @@ end do
 
 ierr = 0
 
-! Averaging still not fully good, needs work
 if (sim%my_id == 0) then
-  !allocate(avg_vals(size(Psi_list)))
   avg_vals = 0.d0
   flux_av = .true.
   call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, avg_vals, flux_av, ierr)
   call save_avg_quantities_h5("flux_averages.h5", PsiN_list, avg_vals)
+  deallocate(avg_vals)
 endif
 
 
@@ -285,6 +284,7 @@ endif
 if (sim%my_id == 0) then
   ! compute R and Z values for the fluxsurfaces in Psi_list
   call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, R_mat, Z_mat, theta_list, ierr )
+  deallocate(PsiN_list)
 
   dims_RZ(1) = size(R_mat, 1) ! n_theta
   dims_RZ(2) = size(R_mat, 2) ! n_psi
@@ -302,6 +302,7 @@ if (sim%my_id == 0) then
                           ES%R_axis, ES%Z_axis, ES%LCFS_a)
                           
   print *, "HDF5 file written successfully."
+  deallocate(Br_mat, Bz_mat, Bphi_mat)
 endif
 
 call MPI_BCAST(dims_RZ, 2, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
@@ -348,16 +349,14 @@ if(sim%my_id == 0) then
   end select
   
   deallocate(sim%groups(1)%particles)
+  deallocate(timesteps)
+  deallocate(events_list)
+  deallocate(Psi_list)
 
 endif
 
 deallocate(R_mat, Z_mat)
-deallocate(timesteps)
-deallocate(events_list)
-deallocate(Psi_list)
-deallocate(PsiN_list)
-deallocate(Br_mat, Bz_mat, Bphi_mat)
-deallocate(avg_vals)
+
 
 sim%stop_now = .false.
 
