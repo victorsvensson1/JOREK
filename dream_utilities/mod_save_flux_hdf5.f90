@@ -31,7 +31,7 @@ contains
 
         ! Poloidal flux scaling: psi / (R0/a)
         aspect_scale = R_ax / a_minor
-        psi_apRp = Psi / aspect_scale
+        psi_apRp =  - Psi / aspect_scale
 
         ! 1. Create the HDF5 file
         call HDF5_create(trim(filename), i_file, ierr)

@@ -48,7 +48,7 @@ use mod_fluxsurf_compute, only: fluxsurface
 use mod_computeB, only: comp_B_field
 use mod_save_flux_hdf5
 use mod_expression
-use mod_fluxsurf_evol, only: initialise_on_flux_surfaces, run_particle_trace
+use mod_fluxsurf_evol, only: initialise_on_flux_surfaces, run_particle_trace, get_psi_at_pos
 use mod_particle_types, only: particle_fieldline
 
 use phys_module, only: index_now
@@ -93,6 +93,7 @@ real*8 :: end_time
 type(event), allocatable :: events_list(:)
 integer :: dims_RZ(2)
 integer :: s, idx, k
+real*8 :: psi_end
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -265,25 +266,18 @@ PsiN_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
 allocate(Psi_list(size(PsiN_list)))
 do k = 1, size(PsiN_list)
     Psi_list(k) = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
-    Psi_list(k) = -Psi_list(k) !flip sign for dream
 end do
 
-do_avg = .true.
 
 ierr = 0
 
 ! Averaging still not fully good, needs work
-if (sim%my_id == 0 .and. do_avg) then
-  print *, "Psi_list:"
-  print *, Psi_list
+if (sim%my_id == 0) then
   !allocate(avg_vals(size(Psi_list)))
   avg_vals = 0.d0
   flux_av = .true.
-
   call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, avg_vals, flux_av, ierr)
   call save_avg_quantities_h5("flux_averages.h5", PsiN_list, avg_vals)
-
-
 endif
 
 
@@ -309,6 +303,66 @@ if (sim%my_id == 0) then
                           
   print *, "HDF5 file written successfully."
 endif
+
+call MPI_BCAST(dims_RZ, 2, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+
+if (sim%my_id /= 0) then
+    if (.not. allocated(R_mat)) allocate(R_mat(dims_RZ(1), dims_RZ(2)))
+    if (.not. allocated(Z_mat)) allocate(Z_mat(dims_RZ(1), dims_RZ(2)))
+endif
+
+call MPI_BCAST(R_mat, size(R_mat), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+call MPI_BCAST(Z_mat, size(Z_mat), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
+
+
+if(sim%my_id == 0) then
+    
+  allocate(particle_fieldline :: sim%groups(1)%particles(dims_RZ(1) * dims_RZ(2)))
+  print *, size(sim%groups(1)%particles), " particles allocated of type particle_fieldline on rank ", sim%my_id
+
+  call initialise_on_flux_surfaces(sim, R_mat, Z_mat)
+
+  allocate(events_list(0))
+
+  allocate(timesteps(1))
+  print *, sim%time, "Starting particle trace..."
+  end_time = sim%time + 1.0d-4
+  print *, "End time for trace: ", end_time
+  timesteps = [1d-6] ! Define the particle timestep for the trace
+  call run_particle_trace(sim, timesteps, events_list, end_time)
+
+
+  select type (p => sim%groups(1)%particles)
+  type is (particle_fieldline)
+      print *, "--- Movement Check (One particle for each surface) ---"
+      do s = 1, dims_RZ(2)
+          ! idx maps to the first theta point of surface 's'
+          idx = s
+          print "(A,I3,A,3F12.6,A,3F12.6)", "Surface ", s, &
+          " Start: ", R_mat(1,s), Z_mat(1,s), 0.0, &
+          " End: ", p(idx)%x(1), p(idx)%x(2), p(idx)%x(3)
+
+          call get_psi_at_pos(ES, node_list, element_list, p(idx)%x, psi_end, ierr)
+          print *, "Intial psi: ", Psi_list(s), " Final psi: ", psi_end
+      end do
+  end select
+  
+  deallocate(sim%groups(1)%particles)
+
+endif
+
+deallocate(R_mat, Z_mat)
+deallocate(timesteps)
+deallocate(events_list)
+deallocate(Psi_list)
+deallocate(PsiN_list)
+deallocate(Br_mat, Bz_mat, Bphi_mat)
+deallocate(avg_vals)
+
+sim%stop_now = .false.
+
+! --- NEW PARTICLE TRACING END ---
+
 
 
 
