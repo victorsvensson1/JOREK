@@ -43,13 +43,8 @@ use mod_coupling_settings, only: use_kin_recomb_global
 use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
-use mod_fluxsurf_avg, only: avg_fluxsurf_list
-use mod_fluxsurf_compute, only: fluxsurface
-use mod_computeB, only: comp_B_field
-use mod_save_flux_hdf5
 use mod_expression
-use mod_fluxsurf_evol, only: initialise_on_flux_surfaces, run_particle_trace, get_psi_at_pos
-use mod_particle_types, only: particle_fieldline
+use mod_com_dream, only: com_dream
 
 use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
@@ -82,18 +77,6 @@ type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
 real*8    :: rho_norm, t_norm, n_norm
-real*8, allocatable :: Psi_list(:), PsiN_list(:), avg_vals(:,:), R_mat(:,:), Z_mat(:,:), theta_list(:)
-real*8, allocatable :: result(:,:)
-real*8, allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
-logical :: flux_av
-integer :: ierr
-logical :: do_avg
-real*8, allocatable :: timesteps(:)
-real*8 :: end_time
-type(event), allocatable :: events_list(:)
-integer :: dims_RZ(2)
-integer :: s, idx, k
-real*8 :: psi_end
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -261,108 +244,10 @@ if(sim%lcm_inner_loop == -9999991) sim%lcm_inner_loop = 1
 sim%istep_fluid = 0
 call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.false.,next_block_write_timing=.false.) ! next_block_write_...=.false. because this is only a header, not the announcement of some action, so we don't want to time or write particle conservation for the "content" of this block as there is no content
 
-PsiN_list = [ (0.001d0 + (i-1) * (0.999d0 - 0.001d0) / 49.d0, i = 1, 50) ]
-
-allocate(Psi_list(size(PsiN_list)))
-do k = 1, size(PsiN_list)
-    Psi_list(k) = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
-end do
-
-
-ierr = 0
-
-if (sim%my_id == 0) then
-  avg_vals = 0.d0
-  flux_av = .true.
-  call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, avg_vals, flux_av, ierr)
-  call save_avg_quantities_h5("flux_averages.h5", PsiN_list, avg_vals)
-  deallocate(avg_vals)
-endif
-
-
-
-if (sim%my_id == 0) then
-  ! compute R and Z values for the fluxsurfaces in Psi_list
-  call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, PsiN_list, R_mat, Z_mat, theta_list, ierr )
-  deallocate(PsiN_list)
-
-  dims_RZ(1) = size(R_mat, 1) ! n_theta
-  dims_RZ(2) = size(R_mat, 2) ! n_psi
-
-
-  ! Compute B-field components for the flux-surfaces selected previously
-  call comp_B_field(ES, sim%fields%node_list, sim%fields%element_list, R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, ierr)
-
-  print *, "Saving data to flux_surfaces.h5..."
-    
-  call save_flux_data_h5("flux_surfaces.h5", &
-                          Psi_list, theta_list, &
-                          R_mat, Z_mat, &
-                          Br_mat, Bz_mat, Bphi_mat, &
-                          ES%R_axis, ES%Z_axis, ES%LCFS_a)
-                          
-  print *, "HDF5 file written successfully."
-  deallocate(Br_mat, Bz_mat, Bphi_mat)
-endif
-
-call MPI_BCAST(dims_RZ, 2, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
-
-if (sim%my_id /= 0) then
-    if (.not. allocated(R_mat)) allocate(R_mat(dims_RZ(1), dims_RZ(2)))
-    if (.not. allocated(Z_mat)) allocate(Z_mat(dims_RZ(1), dims_RZ(2)))
-endif
-
-call MPI_BCAST(R_mat, size(R_mat), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
-call MPI_BCAST(Z_mat, size(Z_mat), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr)
-
-
-if(sim%my_id == 0) then
-    
-  allocate(particle_fieldline :: sim%groups(1)%particles(dims_RZ(1) * dims_RZ(2)))
-  print *, size(sim%groups(1)%particles), " particles allocated of type particle_fieldline on rank ", sim%my_id
-
-  call initialise_on_flux_surfaces(sim, R_mat, Z_mat)
-
-  allocate(events_list(0))
-
-  allocate(timesteps(1))
-  print *, sim%time, "Starting particle trace..."
-  end_time = sim%time + 1.0d-4
-  print *, "End time for trace: ", end_time
-  timesteps = [1d-6] ! Define the particle timestep for the trace
-  call run_particle_trace(sim, timesteps, events_list, end_time)
-
-
-  select type (p => sim%groups(1)%particles)
-  type is (particle_fieldline)
-      print *, "--- Movement Check (One particle for each surface) ---"
-      do s = 1, dims_RZ(2)
-          ! idx maps to the first theta point of surface 's'
-          idx = s
-          print "(A,I3,A,3F12.6,A,3F12.6)", "Surface ", s, &
-          " Start: ", R_mat(1,s), Z_mat(1,s), 0.0, &
-          " End: ", p(idx)%x(1), p(idx)%x(2), p(idx)%x(3)
-
-          call get_psi_at_pos(ES, node_list, element_list, p(idx)%x, psi_end, ierr)
-          print *, "Intial psi: ", Psi_list(s), " Final psi: ", psi_end
-      end do
-  end select
-  
-  deallocate(sim%groups(1)%particles)
-  deallocate(timesteps)
-  deallocate(events_list)
-  deallocate(Psi_list)
-
-endif
-
-deallocate(R_mat, Z_mat)
-
+! Call one subroutine to do all actions for the DREAM communication
+call com_dream(sim, ES, n_psi_surfaces=50, dt_trace=1.0d-4)
 
 sim%stop_now = .false.
-
-! --- NEW PARTICLE TRACING END ---
-
-
 
 
 do while (.not. sim%stop_now)
