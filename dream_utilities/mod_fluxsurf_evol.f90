@@ -76,11 +76,6 @@ contains
             
             target_time = current_time + minval(timesteps) 
             if (target_time > end_time) target_time = end_time
-
-            !do i = 1, size(sim%groups)
-            !n_steps = nint((target_time - current_time) / timesteps(i))
-            n_steps = 1
-            if (n_steps <= 0) cycle
             
             n_lost = 0  
             select type (particles => sim%groups(1)%particles)
@@ -89,12 +84,10 @@ contains
                 !$omp parallel do default(private) shared(sim, n_steps, timesteps, i, target_time) reduction(+:n_lost)
                 do j = 1, size(particles, 1)
                     if (particles(j)%i_elm <= 0) cycle 
-                    do k = 1, n_steps
-                        t_step = current_time + (k-1)*timesteps(i)
-                        !call field_line_runge_kutta_fixed_dt_push_jorek(sim%fields, particles(j), t_step, timesteps(i))
-                        call field_line_runge_kutta_fixed_dt_push_jorek(sim%fields, particles(j), t_step, timesteps(1))
-                        if (particles(j)%i_elm <= 0) exit
-                    end do 
+
+                    call field_line_runge_kutta_fixed_dt_push_jorek(sim%fields, particles(j), current_time, timesteps(1))
+                    if (particles(j)%i_elm <= 0) n_lost = n_lost + 1
+
                 end do
                 !$omp end parallel do
             end select

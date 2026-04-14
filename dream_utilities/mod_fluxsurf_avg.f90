@@ -37,7 +37,7 @@ contains
     logical, optional, intent(in) :: flux_av     !< Perform proper flux average
 
     ! --- Local variables
-    integer :: units, npts, nsmall, i_exp, nmaxstep, NTht, n_plane
+    integer :: units, npts, nsmall, i_exp, nmaxstep, NTht
     real*8  :: deltaphi, PsiNmin, PsiNmax
     type(t_pol_pos_list), save :: pol_pos_list
     type(t_tor_pos_list), save :: tor_pos_list
@@ -46,14 +46,13 @@ contains
     character(len=128) :: desc_T, desc_ne, desc_Epar
     real*8 :: conv_ne, conv_T, conv_E
     
-    !units    = get_int_setting('units', ierr)
-    n_plane = 4 !hardcoded for now, CHANGE!
-    npts = size(Psi_list)
+    units    = get_int_setting('units', ierr)
+    npts = size(psi_list)
     nsmall = 3
     nmaxstep = 2500
     deltaphi = 0.3
-    PsiNmin = Psi_list(1)
-    PsiNmax = Psi_list(size(Psi_list))
+    PsiNmin = psi_list(1)
+    PsiNmax = psi_list(size(psi_list))
     nTht = max(150,6*n_plane)
     
     name_T = 'T'

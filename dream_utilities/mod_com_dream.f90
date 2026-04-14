@@ -1,6 +1,6 @@
 module mod_com_dream
     use particle_tracer
-    use mod_fluxsurf_evol  ! Assuming your tracer subroutines are here
+    use mod_fluxsurf_evol
     use mod_computeB       ! For comp_B_field
     use mod_fields_linear
     use equil_info
@@ -28,11 +28,15 @@ contains
         real(kind=8), allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
         real(kind=8), allocatable :: avg_vals(:,:), timesteps(:)
         type(event), allocatable  :: events_list(:)
+        real(kind=8), allocatable :: r_mid_n(:), r_mid_n_plus_1(:)
         
         integer :: ierr, k, s, idx
         real(kind=8) :: end_time, psi_end
         logical :: flux_av
         integer :: dims_RZ(2)
+        character(len=64) :: fname_avg, fname_surf
+        real(kind=8) :: R_new
+
 
         ! Only Rank 0 performs this diagnostic logic
         if (sim%my_id /= 0) return
@@ -42,6 +46,7 @@ contains
         ! 1. Define Flux Surfaces
         allocate(PsiN_list(n_psi_surfaces))
         allocate(Psi_list(n_psi_surfaces))
+        
         do k = 1, n_psi_surfaces
             PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(n_psi_surfaces-1, 8)
             Psi_list(k)  = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
@@ -51,25 +56,35 @@ contains
         allocate(avg_vals(n_psi_surfaces, 20)) ! Adjust size based on JOREK needs
         avg_vals = 0.d0
         flux_av = .true.
+        ierr = 0
         call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, &
                                PsiN_list, avg_vals, flux_av, ierr)
-        call save_avg_quantities_h5("flux_averages.h5", PsiN_list, avg_vals)
+
+        write(fname_avg, '("flux_averages_", I6.6, ".h5")') sim%istep_fluid
+        call save_avg_quantities_h5(trim(fname_avg), PsiN_list, avg_vals)
 
         ! 3. Geometry and Field Calculation
         call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, &
                          PsiN_list, R_mat, Z_mat, theta_list, ierr)
-        
         dims_RZ = [size(R_mat, 1), size(R_mat, 2)]
 
         call comp_B_field(ES, sim%fields%node_list, sim%fields%element_list, &
                           R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, ierr)
 
         ! 4. Save radilal grid for DREAM
-        call save_flux_data_h5("flux_surfaces.h5", Psi_list, theta_list, &
+        write(fname_surf, '("flux_surfaces_", I6.6, ".h5")') sim%istep_fluid
+        call save_flux_data_h5(trim(fname_surf), Psi_list, theta_list, &
                                R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, &
                                ES%R_axis, ES%Z_axis, ES%LCFS_a)
 
         ! 5. Particle Tracing (Evolution Mapping)
+        allocate(r_mid_n(n_psi_surfaces))
+        allocate(r_mid_n_plus_1(n_psi_surfaces))
+
+        do s = 1, n_psi_surfaces
+            r_mid_n(s) = R_mat(1, s) - ES%R_axis
+        end do
+
         allocate(particle_fieldline :: sim%groups(1)%particles(dims_RZ(1) * dims_RZ(2)))
         call initialise_on_flux_surfaces(sim, R_mat, Z_mat)
 
@@ -84,12 +99,18 @@ contains
         select type (p => sim%groups(1)%particles)
         type is (particle_fieldline)
             print *, "--- Mapping: psi(n) -> psi(n+1) ---"
-            do s = 1, dims_RZ(2)
-                idx = s
+            do s = 1, n_psi_surfaces
                 call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
-                                    p(idx)%x, psi_end, ierr)
+                                    p(s)%x, psi_end, ierr)
                 print "(A,I3,A,F12.6,A,F12.6)", "Surface ", s, " | Init Psi: ", &
                        Psi_list(s), " | End Psi: ", psi_end
+                
+                call find_midplane_R_from_psi(ES, sim%fields%node_list, sim%fields%element_list, &
+                                      psi_end, ES%R_axis, R_new, ierr)
+                r_mid_n_plus_1(s) = R_new - ES%R_axis
+        
+                ! Verification print
+                print *, "Surface ", s, " Mapping: ", r_mid_n(s), " -> ", r_mid_n_plus_1(s)
             end do
         end select
 
@@ -101,5 +122,48 @@ contains
         print *, ">>> Flux Surface Evolution Diagnostic Complete <<<"
 
     end subroutine com_dream
+
+    subroutine find_midplane_R_from_psi(ES, node_list, element_list, target_psi, R_axis, R_match, ierr)
+        type(t_equil_state), intent(in)      :: ES
+        type(type_node_list), intent(in)     :: node_list
+        type(type_element_list), intent(in)  :: element_list
+        real(kind=8), intent(in)             :: target_psi    !< The psi value we are looking for
+        real(kind=8), intent(in)             :: R_axis        !< Current magnetic axis R
+        real(kind=8), intent(out)            :: R_match       !< The resulting R coordinate
+        integer, intent(out)                 :: ierr
+
+        ! --- Local variables
+        real(kind=8) :: R_low, R_high, R_mid, psi_mid, x_tmp(3)
+        integer      :: i
+
+        ierr = 0
+        ! Set search bounds: from the axis to well outside the plasma boundary
+        R_low  = R_axis
+        R_high = R_axis + ES%LCFS_a * 1.5d0 
+
+        ! Bisection loop for high precision
+        do i = 1, 25 
+            R_mid = (R_low + R_high) * 0.5d0
+            
+            ! Prepare coordinates for psi evaluation (Z=0, Phi=0)
+            x_tmp = [R_mid, 0.0d0, 0.0d0]
+            
+            call get_psi_at_pos(ES, node_list, element_list, x_tmp, psi_mid, ierr)
+            
+            if (ierr /= 0) then
+                print *, "Error: Psi evaluation failed at R=", R_mid
+                return
+            endif
+
+            ! JOREK convention: psi usually increases from axis to boundary
+            if (psi_mid < target_psi) then
+                R_low = R_mid
+            else
+                R_high = R_mid
+            endif
+        end do
+
+        R_match = R_mid
+    end subroutine find_midplane_R_from_psi
 
 end module mod_com_dream
