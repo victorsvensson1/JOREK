@@ -100,10 +100,9 @@ contains
 #endif
     end subroutine save_avg_quantities_h5
 
-    subroutine save_radial_mapping_h5(filename, r_mid_n, r_mid_n_plus_1)
+    subroutine save_radial_mapping_h5(filename, r_mid_n)
         character(len=*), intent(in) :: filename
         real*8, intent(in)           :: r_mid_n(:)
-        real*8, intent(in)           :: r_mid_n_plus_1(:)
 
 #ifdef USE_HDF5
         integer(HID_T) :: i_file, i_group
@@ -125,7 +124,6 @@ contains
         ! 3. Save the vectors
         ! Assumes HDF5_array1D_saving handles the metadata and low-level h5dwrite calls
         call HDF5_array1D_saving(i_group, r_mid_n, n_psi, 'r_mid_n'//char(0))
-        call HDF5_array1D_saving(i_group, r_mid_n_plus_1, n_psi, 'r_mid_n_plus_1'//char(0))
 
         ! 4. Close handles
         call HDF5_group_close(i_group)

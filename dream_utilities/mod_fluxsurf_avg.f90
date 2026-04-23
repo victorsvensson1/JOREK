@@ -12,7 +12,6 @@ module mod_fluxsurf_avg
     use constants
     implicit none
 
-    real*8, allocatable, private, save :: result(:,:,:,:), res1d(:,:)
 
     private
     public :: avg_fluxsurf_list
@@ -45,6 +44,11 @@ contains
     character(len=16)  :: name_T, name_ne, name_Epar
     character(len=128) :: desc_T, desc_ne, desc_Epar
     real*8 :: conv_ne, conv_T, conv_E
+    real*8, allocatable :: result(:,:,:,:), res1d(:,:)
+
+    if (allocated(result)) deallocate(result)
+    if (allocated(res1d)) deallocate(res1d)
+
 
     ierr = 0
     
