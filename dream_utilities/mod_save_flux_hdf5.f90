@@ -4,7 +4,7 @@ module mod_save_flux_hdf5
     implicit none
 
     private 
-    public :: save_flux_data_h5, save_avg_quantities_h5
+    public :: save_flux_data_h5, save_avg_quantities_h5, save_radial_mapping_h5
 
 contains
 
@@ -99,6 +99,41 @@ contains
         write(*,*) 'Warning: HDF5 not enabled. Average data not saved.'
 #endif
     end subroutine save_avg_quantities_h5
+
+    subroutine save_radial_mapping_h5(filename, r_mid_n, r_mid_n_plus_1)
+        character(len=*), intent(in) :: filename
+        real*8, intent(in)           :: r_mid_n(:)
+        real*8, intent(in)           :: r_mid_n_plus_1(:)
+
+#ifdef USE_HDF5
+        integer(HID_T) :: i_file, i_group
+        integer        :: ierr, n_psi
+
+        ierr = 0
+        n_psi = size(r_mid_n)
+
+        ! 1. Create/Open the HDF5 file
+        call HDF5_create(trim(filename), i_file, ierr)
+        if (ierr /= 0) then
+            write(*,*) 'Error: Could not create HDF5 file ', trim(filename)
+            return
+        end if
+
+        ! 2. Create a group for the mapping results
+        call HDF5_group_create(i_file, 'mapping'//char(0), i_group)
+
+        ! 3. Save the vectors
+        ! Assumes HDF5_array1D_saving handles the metadata and low-level h5dwrite calls
+        call HDF5_array1D_saving(i_group, r_mid_n, n_psi, 'r_mid_n'//char(0))
+        call HDF5_array1D_saving(i_group, r_mid_n_plus_1, n_psi, 'r_mid_n_plus_1'//char(0))
+
+        ! 4. Close handles
+        call HDF5_group_close(i_group)
+        call HDF5_close(i_file)
+#else
+        write(*,*) 'Warning: HDF5 not enabled. Radial mapping not saved.'
+#endif
+    end subroutine save_radial_mapping_h5
 
     ! -----------------------------------------------------------
     ! Internal Private Helper Subroutines

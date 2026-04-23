@@ -2,7 +2,8 @@
 module mod_fluxsurf_evol
     use particle_tracer
     ! Use the standard (non-relativistic) guiding center module
-    use mod_find_rz_nearby
+    !use mod_find_rz_nearby
+    !use find_RZ
     use mod_gc_relativistic
     use equil_info
     use mod_fields_linear  
@@ -24,12 +25,14 @@ contains
         real(kind=8), intent(in)          :: R_mat(:,:), Z_mat(:,:)
         integer :: s, idx, n_psi, ifail
         real(kind=8) :: r_start, z_start
+        real(kind=8), dimension(3) :: E, b, gradB, curlb, dbdt, B_star
+        real(kind=8) :: normB
 
         ! We only care about the number of radial surfaces (n_psi)
         n_psi = size(R_mat, 2)
 
         select type (p => sim%groups(1)%particles)
-        type is (particle_fieldline)
+        type is (particle_gc_relativistic)
             idx = 0
             ! Loop only over flux surfaces
             do s = 1, n_psi
@@ -42,15 +45,22 @@ contains
                 p(idx)%x(1) = r_start
                 p(idx)%x(2) = z_start
                 p(idx)%x(3) = 0.0d0
-
-                p(idx)%v = 1.0d5
-
-                ! Initialize element search
+                p(idx)%q = -1
                 p(idx)%i_elm = -1 
-                call find_RZ_nearby(sim%fields%node_list, sim%fields%element_list, &
-                    r_start, z_start, 0.5d0, 0.5d0, p(idx)%i_elm, &
-                    r_start, z_start, p(idx)%st(1), p(idx)%st(2), p(idx)%i_elm, ifail)
+
+
+                call find_RZ(sim%fields%node_list, sim%fields%element_list, &
+                                p(idx)%x(1), p(idx)%x(2), &      ! Input R, Z for particle idx
+                                p(idx)%x(1), p(idx)%x(2), &      ! Dummy/Initial R, Z
+                                p(idx)%i_elm, &                  ! The specific particle's element
+                                p(idx)%st(1), p(idx)%st(2), &    ! The specific particle's local coords
+                                ifail)
                 
+                call sim%fields%calc_EBNormBGradBCurlbDbdt(sim%time,p(idx)%i_elm,p(idx)%st, p(idx)%x(3),E,b,normB,gradB,curlb,dbdt)
+                
+                print *, "E: ", E
+                print *, "dot_prod:", dot_product(E, b)
+
                 if (ifail /= 0) then
                     p(idx)%i_elm = -1
                     print *, "Warning: Particle at surface ", s, " failed localization."
@@ -65,40 +75,51 @@ contains
         real(kind=8), intent(in)          :: timesteps(:), end_time
         type(event), intent(inout)        :: events(:)
         
-        real(kind=8)    :: target_time, t_step, current_time
-        integer(kind=4) :: i, j, k, n_steps, n_lost
+        real(kind=8)    :: local_time, t_step
+        integer(kind=4) :: j, k, n_pushes, n_lost
 
-        ! Process any events at the very start (t=0)
-        !call with(sim, events, at=sim%time)
-        current_time = sim%time
-
-        do while (current_time < end_time)
-            
-            target_time = current_time + minval(timesteps) 
-            if (target_time > end_time) target_time = end_time
-            
-            n_lost = 0  
-            select type (particles => sim%groups(1)%particles)
-            type is (particle_fieldline)
+        n_lost = 0 
+        t_step = timesteps(1)
         
-                !$omp parallel do default(private) shared(sim, n_steps, timesteps, i, target_time) reduction(+:n_lost)
-                do j = 1, size(particles, 1)
-                    if (particles(j)%i_elm <= 0) cycle 
+        ! Calculate total pushes required to reach end_time
+        ! Or you can set n_pushes to a fixed integer (e.g., 1000)
+        n_pushes = ceiling((end_time - sim%time) / t_step)
+        print *, "Running particle trace for ", n_pushes, " pushes per particle to reach end time: ", end_time
 
-                    call field_line_runge_kutta_fixed_dt_push_jorek(sim%fields, particles(j), current_time, timesteps(1))
-                    if (particles(j)%i_elm <= 0) n_lost = n_lost + 1
+        select type (particles => sim%groups(1)%particles)
+        type is (particle_gc_relativistic)
 
+            !!$omp parallel do default(private) shared(sim, t_step, n_pushes) reduction(+:n_lost)
+            do j = 1, size(particles, 1)
+                if (particles(j)%i_elm <= 0) cycle 
+
+                local_time = sim%time
+
+                ! Inner Loop: Perform exactly N pushes for particle j
+                do k = 1, n_pushes
+                    
+                    call runge_kutta_fixed_dt_gc_push_jorek(sim%fields, local_time, t_step, sim%groups(1)%mass, particles(j))
+                    
+                    local_time = local_time + t_step
+
+                    ! If particle is lost, stop pushing it and move to next particle (j+1)
+                    if (particles(j)%i_elm <= 0) then
+                        n_lost = n_lost + 1
+                        exit 
+                    end if
                 end do
-                !$omp end parallel do
-            end select
-            !end do
+            end do
+            !!$omp end parallel do
 
-            ! Move the simulation clock forward
-            current_time = target_time
-            
-        end do
+        end select
 
-        print *, "Tracing complete. Returning to main script at time: ", sim%time
+        ! Update global simulation time based on the steps taken
+        !sim%time = sim%time + (n_pushes * t_step)
+
+        print *, "Tracing complete."
+        print *, "Pushes per particle:", n_pushes
+        print *, "Total particles lost:", n_lost
+        print *, "Current simulation time:", sim%time
     end subroutine run_particle_trace
 
     subroutine get_psi_at_pos(ES, node_list, element_list, x, psi, ierr)
@@ -120,8 +141,8 @@ contains
 
     ierr = 0
 
-    name_psi = 'Psi'
-    desc_psi = 'poloidal magnetic flux'
+    name_psi = 'Psi_N'
+    desc_psi = 'normalized poloidal magnetic flux'
 
     call add(expr_list, name_psi, desc_psi)
 

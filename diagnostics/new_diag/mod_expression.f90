@@ -1651,8 +1651,9 @@ module mod_expression
           dpsi_dt   = delta_g(var_psi) / tstep  !BigR*(ps0_s*u0_t - ps0_t*u0_s)/xjac + eta_T*zj0 - F0*u0_p 
 #endif
           ExB_norm  = -dpsi_dt * (ps0_R*nmlR + ps0_Z*nmlZ) / (BigR**2.d0)   
-          E_par     = - R * ( eta_T * zj0 / R**2                                                       &
-                        + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
+          !E_par     = - R * ( eta_T * zj0 / !R**2                                                       &
+          !              + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
+          E_par = - F0/sqrt(BB2) * ( ( eta_T/BigR**2 * zj0 ) + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
 
           ! --- Factors for switching between JOREK normalized and SI units.
           if ( units == SI_UNITS ) then

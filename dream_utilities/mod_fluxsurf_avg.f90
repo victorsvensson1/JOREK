@@ -45,8 +45,9 @@ contains
     character(len=16)  :: name_T, name_ne, name_Epar
     character(len=128) :: desc_T, desc_ne, desc_Epar
     real*8 :: conv_ne, conv_T, conv_E
+
+    ierr = 0
     
-    units    = get_int_setting('units', ierr)
     npts = size(psi_list)
     nsmall = 3
     nmaxstep = 2500
@@ -88,7 +89,7 @@ contains
 
     conv_T = 1.d0 / ( MU_zero * central_density * 1.d20 * EL_CHG )
     conv_ne = 1.d20
-    conv_E = 1.d-1 / sqrt(MU_zero*central_density *1.d20 * central_mass * ATOMIC_MASS_UNIT) !1.d1 instead of 1.d0 gives me right order of magnitude
+    conv_E = 1.d0 / sqrt(MU_zero*central_density *1.d20 * central_mass * ATOMIC_MASS_UNIT)
     res1d(:,1) = res1d(:,1) * conv_T
     res1d(:,2) = res1d(:,2) * conv_ne
     res1d(:,3) = res1d(:,3) * conv_E

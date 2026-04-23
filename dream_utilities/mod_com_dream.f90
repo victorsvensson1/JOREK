@@ -16,27 +16,28 @@ module mod_com_dream
 
 contains
 
-    subroutine com_dream(sim, ES, n_psi_surfaces, dt_trace)
+    subroutine com_dream(sim, ES, dt_trace, PsiN_list)
         type(particle_sim), intent(inout) :: sim
         type(t_equil_state), intent(in)   :: ES
-        integer, intent(in)               :: n_psi_surfaces
         real(kind=8), intent(in)          :: dt_trace
+        real(kind=8), intent(inout)          :: PsiN_list(:)
 
         ! --- Local Data ---
-        real(kind=8), allocatable :: PsiN_list(:), Psi_list(:), theta_list(:)
+        real(kind=8), allocatable :: Psi_list(:), theta_list(:)
         real(kind=8), allocatable :: R_mat(:,:), Z_mat(:,:)
         real(kind=8), allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
         real(kind=8), allocatable :: avg_vals(:,:), timesteps(:)
         type(event), allocatable  :: events_list(:)
         real(kind=8), allocatable :: r_mid_n(:), r_mid_n_plus_1(:)
         
-        integer :: ierr, k, s, idx
+        integer :: ierr, k, s, idx, n_psi_surfaces
         real(kind=8) :: end_time, psi_end
         logical :: flux_av
         integer :: dims_RZ(2)
-        character(len=64) :: fname_avg, fname_surf
+        character(len=64) :: fname_avg, fname_surf, fname_map
         real(kind=8) :: R_new
 
+        n_psi_surfaces = size(PsiN_list)
 
         ! Only Rank 0 performs this diagnostic logic
         if (sim%my_id /= 0) return
@@ -44,22 +45,23 @@ contains
         print *, ">>> Starting Flux Surface Evolution Diagnostic <<<"
 
         ! 1. Define Flux Surfaces
-        allocate(PsiN_list(n_psi_surfaces))
         allocate(Psi_list(n_psi_surfaces))
         
         do k = 1, n_psi_surfaces
-            PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(n_psi_surfaces-1, 8)
+            !PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(n_surfaces-1, 8)
             Psi_list(k)  = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
         end do
 
+        print *, "PsiN_list (normalized): ", PsiN_list
+
         ! 2. Flux Surface Averages
-        allocate(avg_vals(n_psi_surfaces, 20)) ! Adjust size based on JOREK needs
-        avg_vals = 0.d0
         flux_av = .true.
         ierr = 0
+        print *, "here1"
         call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, &
                                PsiN_list, avg_vals, flux_av, ierr)
-
+        print *, "here2"
+        !call avg_fluxsurf_list(avg_vals, n_psi_surfaces)
         write(fname_avg, '("flux_averages_", I6.6, ".h5")') sim%istep_fluid
         call save_avg_quantities_h5(trim(fname_avg), PsiN_list, avg_vals)
 
@@ -85,25 +87,32 @@ contains
             r_mid_n(s) = R_mat(1, s) - ES%R_axis
         end do
 
-        allocate(particle_fieldline :: sim%groups(1)%particles(dims_RZ(1) * dims_RZ(2)))
+        allocate(particle_gc_relativistic :: sim%groups(1)%particles(size(PsiN_list)))
+        sim%groups(1)%mass = 5.4857990907016d-4 !< particle mass in AMU
         call initialise_on_flux_surfaces(sim, R_mat, Z_mat)
+        do s = 1, n_psi_surfaces
+            print *, "Initialized particle ", s, " at R=", sim%groups(1)%particles(s)%x(1), &
+                     " Z=", sim%groups(1)%particles(s)%x(2)
+        end do
 
         allocate(events_list(0))
         allocate(timesteps(1))
-        timesteps = [1d-6] 
+        timesteps = [1d-8] 
         end_time = sim%time + dt_trace
 
         call run_particle_trace(sim, timesteps, events_list, end_time)
 
         ! 6. Mapping Check & Radial Mapping Output
         select type (p => sim%groups(1)%particles)
-        type is (particle_fieldline)
+        type is (particle_gc_relativistic)
             print *, "--- Mapping: psi(n) -> psi(n+1) ---"
             do s = 1, n_psi_surfaces
                 call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
                                     p(s)%x, psi_end, ierr)
                 print "(A,I3,A,F12.6,A,F12.6)", "Surface ", s, " | Init Psi: ", &
-                       Psi_list(s), " | End Psi: ", psi_end
+                       PsiN_list(s), " | End Psi: ", psi_end
+                
+                PsiN_list(s) = psi_end
                 
                 call find_midplane_R_from_psi(ES, sim%fields%node_list, sim%fields%element_list, &
                                       psi_end, ES%R_axis, R_new, ierr)
@@ -113,11 +122,15 @@ contains
                 print *, "Surface ", s, " Mapping: ", r_mid_n(s), " -> ", r_mid_n_plus_1(s)
             end do
         end select
+        
+        write(fname_map, '("radial_mapping_", I6.6, ".h5")') sim%istep_fluid
+        call save_radial_mapping_h5(trim(fname_map), r_mid_n, r_mid_n_plus_1)
 
         ! 7. Clean up
         deallocate(sim%groups(1)%particles, timesteps, events_list)
-        deallocate(Psi_list, PsiN_list, theta_list, R_mat, Z_mat)
+        deallocate(Psi_list, theta_list, R_mat, Z_mat)
         deallocate(Br_mat, Bz_mat, Bphi_mat, avg_vals)
+        deallocate(r_mid_n, r_mid_n_plus_1)
 
         print *, ">>> Flux Surface Evolution Diagnostic Complete <<<"
 
