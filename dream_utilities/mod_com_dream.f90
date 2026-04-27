@@ -47,7 +47,6 @@ contains
         allocate(Psi_list(n_psi_surfaces))
         
         do k = 1, n_psi_surfaces
-            !PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(n_surfaces-1, 8)
             Psi_list(k)  = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
         end do
 

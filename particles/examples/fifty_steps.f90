@@ -95,17 +95,21 @@ program fifty_steps
         end_time   = next_event_at(sim, events)
         delta_t    = (end_time - start_time) / real(total_substeps, 8)
         
-        write(*,*) 'Advancing interval from ', start_time, ' to ', end_time
+        if (sim%my_id == 0) then
+            write(*,*) 'Advancing interval from ', start_time, ' to ', end_time
+        end if
 
         ! 2. Inner loop to call com_dream 50 times
-        do i_step = 1, 3
+        do i_step = 1, 50
 
             sim%istep_fluid = sim%istep_fluid + 1
             
             ! Update simulation time for interpolation
             sim%time = start_time + real(i_step, 8) * delta_t
-            print *, 'Substep ', i_step, ' at time ', sim%time
-            
+            if (sim%my_id == 0) then
+                print *, 'Substep ', i_step, ' at time ', sim%time, 'istep_fluid: ', sim%istep_fluid
+            end if
+
             ! Execute interpolation event to update fields to the new sim%time
             call with(sim, events, at=sim%time)
 
@@ -150,11 +154,6 @@ program fifty_steps
 
         end do 
 
-        ! Ensure the outer loop recognizes we have reached the target
-        ! if (sim%time >= next_event_at(sim, events)) then
-        !      ! This triggers the stop_action or next file read in the events list
-        !      call with(sim, events, at=sim%time)
-        ! endif
         sim%stop_now = .true.  
 
     enddo 

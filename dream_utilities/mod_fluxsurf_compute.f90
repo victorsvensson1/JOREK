@@ -12,7 +12,7 @@ module mod_fluxsurf_compute
     use convert_character
     implicit none
 
-    real*8, allocatable, private, save :: result(:,:,:,:), res0d(:)
+    !real*8, allocatable, private, save :: result(:,:,:,:), res0d(:)
 
 
     private
@@ -36,6 +36,8 @@ contains
     real*8  :: f0, f1, pi
     real*8, allocatable :: rho_prev(:)
 
+    logical :: converged
+
     n_psi = size(psi_list)
     n_theta = 128 
     pi = 4.0d0 * atan(1.0d0)
@@ -54,11 +56,19 @@ contains
 
             ! Set two initial guesses for the Secant Method
             if (k == 1) then
-                rho_0 = 0.00d0  ! Magnetic axis
-                rho_1 = 0.02d0  ! Tiny step away
+                rho_0 = 0.00d0
+                rho_1 = 0.02d0
             else
-                rho_0 = rho_prev(i) * 0.98d0
-                rho_1 = rho_prev(i)
+                if (rho_prev(i) < 1.d-2) then
+                    ! rho_prev collapsed to axis — use analytic estimate instead
+                    ! psi ~ rho^2 near axis, so rho ~ sqrt(psiN) * a
+                    rho_1 = sqrt(psi_list(k)) * ES%LCFS_a
+                    rho_0 = rho_1 * 0.8d0
+
+                else
+                    rho_0 = rho_prev(i) * 0.98d0
+                    rho_1 = rho_prev(i)
+                end if
             end if
 
 
@@ -68,6 +78,8 @@ contains
                               ES%Z_axis + rho_0*sin(curr_theta), f0, ierr)
 
             f0 = f0 - target_psi
+
+            converged = .false.
 
             do iter = 1, 20
                 call get_psi_only(node_list, element_list, ES, &
@@ -79,19 +91,31 @@ contains
 
                 ! Secant Method Formula
                 rho_next = rho_1 - f1 * (rho_1 - rho_0) / (f1 - f0)
+                rho_next = max(0.0d0, min(rho_next, sqrt(psi_list(k)) * ES%LCFS_a * 2.0d0))
 
                 ! Update guesses
                 rho_0 = rho_1
                 f0 = f1
                 rho_1 = rho_next
 
-                if (abs(rho_1 - rho_0) < 1.d-8) exit
+                if (abs(rho_1 - rho_0) < 1.d-8) then
+                    converged = .true.
+                    exit
+                end if
             end do
 
-            R_mat(i, k) = ES%R_axis + rho_1 * cos(curr_theta)
-            Z_mat(i, k) = ES%Z_axis + rho_1 * sin(curr_theta)
-            rho_prev(i) = rho_1
+            if (converged) then
+                R_mat(i, k) = ES%R_axis + rho_1 * cos(curr_theta)
+                Z_mat(i, k) = ES%Z_axis + rho_1 * sin(curr_theta)
+                rho_prev(i) = rho_1
+            else
+                print *, "Warning: Secant method did not converge for k=", k, " theta index=", i, "theta=", curr_theta
+                ! If it failed, use a linear interpolation between neighbors as a fallback
+                rho_prev(i) = 0.5d0 * (rho_prev(max(1,i-1)) + rho_prev(min(n_theta,i+1)))
+            end if
         end do
+        print *, "DEBUG: Target Psi for k=", k, " is ", target_psi
+        print *, "DEBUG: Resulting R at theta=0 is ", R_mat(1, k)
     end do
 
     deallocate(rho_prev)
@@ -109,6 +133,10 @@ contains
     integer :: units
     character(len=16)  :: name_psi
     character(len=128) :: desc_psi
+    real*8, allocatable :: result(:,:,:,:), res0d(:)
+
+    if (allocated(res0d)) deallocate(res0d)
+    if (allocated(result)) deallocate(result)
 
     name_psi = 'Psi'
     desc_psi = 'Poloidal flux'
