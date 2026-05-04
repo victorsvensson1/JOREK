@@ -75,7 +75,7 @@ contains
           ! Store in our output matrices
           Br_mat(i,j)   = res0d(1)
           Bz_mat(i,j)   = res0d(2)
-          Bphi_mat(i,j) = -res0d(3) ! Note the negative sign for Bphi to match DREAM convention
+          Bphi_mat(i,j) = res0d(3) ! Note the negative sign for Bphi to match DREAM convention
           
        end do
     end do

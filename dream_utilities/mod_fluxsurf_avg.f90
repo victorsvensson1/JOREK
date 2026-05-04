@@ -38,8 +38,8 @@ contains
     ! --- Local variables
     integer :: units, npts, nsmall, i_exp, nmaxstep, NTht
     real*8  :: deltaphi, PsiNmin, PsiNmax
-    type(t_pol_pos_list), save :: pol_pos_list
-    type(t_tor_pos_list), save :: tor_pos_list
+    type(t_pol_pos_list) :: pol_pos_list
+    type(t_tor_pos_list) :: tor_pos_list
     type(t_expr_list) :: expr_list
     character(len=16)  :: name_T, name_ne, name_Epar
     character(len=128) :: desc_T, desc_ne, desc_Epar

@@ -44,7 +44,8 @@ use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
 use mod_expression
-use mod_com_dream, only: com_dream
+use mod_com_dream, only: com_dream, init_dream_coupling
+use mod_impurity, only: init_imp_adas
 
 use phys_module, only: index_now
 use phys_module, only: tstep,tstep_n,restart_particles, restart, t_start, nout
@@ -92,6 +93,11 @@ integer,                      dimension(:), allocatable :: recomb_groups
 type(particle_puffing),       dimension(:), allocatable :: puff_actions   
 type(wall_act_group),         dimension(:), allocatable :: wall_act_groups
 type(type_neutral_collision), dimension(:), allocatable :: neutral_collisions
+
+! for DREAM com
+real(kind=8), allocatable :: PsiN_list(:)
+integer :: k
+
 
 !tmp
 class(type_rng), dimension(:), allocatable :: wall_rng
@@ -150,6 +156,15 @@ endif ! (restart_particles)
 
 ! Read Open ADAS data for plasma fluid
 if (deuterium_adas .and. use_kin_recomb_global) ad_deuterium =  read_adf11(sim%my_id,'96_h') !< move to core (jorek2_main for particles)
+
+#if (defined WITH_Impurities)
+   ! --- Read ADAS data and generate coronal equilibrium if needed
+   call init_imp_adas(sim%my_id)
+#else
+   if (use_imp_adas .and. (nimp_bg(1) > 0.d0)) then
+     call init_imp_adas(sim%my_id)
+   endif
+#endif
 
 ! --- Setting up random numbers for ionisation probability
 seed = random_seed()
@@ -241,14 +256,24 @@ if(sim%lcm_inner_loop == -9999991) sim%lcm_inner_loop = 1
 !*                           main loop                                 *
 !***********************************************************************
 
-sim%istep_fluid = 0
+sim%istep_fluid = 0 !0 originally
+print*, "istep_fluid now", sim%istep_fluid
+
 call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.false.,next_block_write_timing=.false.) ! next_block_write_...=.false. because this is only a header, not the announcement of some action, so we don't want to time or write particle conservation for the "content" of this block as there is no content
 
 ! Call one subroutine to do all actions for the DREAM communication
-call com_dream(sim, ES, n_psi_surfaces=50, dt_trace=1.0d-4)
+
+allocate(PsiN_list(50))
+do k = 1, size(PsiN_list)
+    PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(size(PsiN_list)-1, 8)
+end do
+
+
+
 
 sim%stop_now = .false.
 
+call init_dream_coupling()
 
 do while (.not. sim%stop_now)
   sim%istep_fluid = sim%istep_fluid + 1
@@ -264,6 +289,8 @@ do while (.not. sim%stop_now)
     write(*,*) "sim%time       : ",sim%time
     write(*,*) "tstep_fluid_si : ",sim%tstep_fluid_si
   endif
+
+  call com_dream(sim, ES, PsiN_list)
 
   ! --- Interactions that happen on the fluid timestep (creating kinetic particles)
 
@@ -305,6 +332,9 @@ do while (.not. sim%stop_now)
   ! if no %each_nstep_part is set, gcd is the maximum possible value of sim%nstep_inner_loop
   inner_stepsize = sim%gcd_inner_loop
   if(sim%gcd_inner_loop == -9999991) inner_stepsize = sim%nstep_inner_loop
+
+  print *, "tstep fluid:", sim%tstep_fluid_si
+  print *, "tstep part:", tstep_particles
 
   if (sim%my_id .eq. 0) then
     if(sim%tstep_fluid_si < tstep_particles) then

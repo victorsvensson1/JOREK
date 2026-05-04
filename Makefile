@@ -17,6 +17,26 @@ main: jorek_model$(MODEL_NUMBER)
 # Some defaults and parsing logic for makefile.inc
 include defaults.mk
 
+$(MODDIR):
+	mkdir -p $(MODDIR)
+
+$(MODDIR)/libmuscle.mod: | $(MODDIR)
+	cp $(MUSCLE3_DIR)/libmuscle/fortran/build/libmuscle/libmuscle.mod $(MODDIR)/
+
+$(MODDIR)/ymmsl.mod: | $(MODDIR)
+	cp $(MUSCLE3_DIR)/libmuscle/fortran/build/libmuscle/ymmsl.mod $(MODDIR)/ 2>/dev/null || \
+	find $(MUSCLE3_DIR) -name "ymmsl.mod" -exec cp {} $(MODDIR)/ \;
+
+.mod/libmuscle.mod: ;
+.mod/ymmsl.mod: ;
+
+# Prevent make from trying to build libmuscle.o or ymmsl.o from source
+$(OBJDIR)/libmuscle.o: ;
+$(OBJDIR)/ymmsl.o: ;
+
+# All object files depend on the external mods being present first
+$(OBJDIR)/mod_com_dream.o: $(MODDIR)/libmuscle.mod $(MODDIR)/ymmsl.mod
+
 # Build the main executable with a different name from the source file jorek2_main.o
 jorek_model$(MODEL_NUMBER): $(OBJDIR)/jorek2_main.o $(shell ./util/obj_deps $(DEPDIR)/jorek2_main.d)
 	$(FC) $(FLAGS) $(DEFINES) $(INCLUDES) -o $@ $^ $(LIBS)
@@ -140,7 +160,17 @@ endif
 
 # The included programs are defined in the $(depends) files
 # For each of these programs add the default template
-$(foreach prog,$(PROGRAM_SOURCES),$(eval $(call PROGRAM_TEMPLATE,$(prog))))
+$(foreach prog,$(filter-out %kinetic_main,$(PROGRAM_SOURCES)),$(eval $(call PROGRAM_TEMPLATE,$(prog))))
+
+# kinetic_main gets a custom link rule that filters MUSCLE3 stubs
+MUSCLE3_STUBS := .obj/libmuscle.o .obj/ymmsl.o
+.obj/libmuscle.o: ;
+.obj/ymmsl.o: ;
+
+kinetic_main: $(OBJDIR)/kinetic_main.o $(filter-out $(MUSCLE3_STUBS), \
+              $(shell ./util/obj_deps $(DEPDIR)/kinetic_main.d))
+	$(FC) $(FLAGS) $(EXTRA_FLAGS) $(DEFINES) $(INCLUDES) \
+	    -o kinetic_main $^ $(LIBS)
 # To compile all programs found in $(DIRS)
 all: $(basename $(notdir $(PROGRAM_SOURCES)))
 # A list of supported diagnostics, that should compile properly for regression
@@ -175,7 +205,9 @@ generate_code: algexpr2fort
 	@echo ">> Generating evaluation statements for mod_elt_matrix <<"
 	@./algexpr2fort
 	@touch generate_code
-
+algexpr2fort: LIBS=$(ALGEXPR_LIBS)
+algexpr2fort: MUSCLE3_LIB=
+algexpr2fort: LIBS := $(filter-out $(MUSCLE3_LIB), $(LIBS)) -lstdc++
 # Special cases
 # Add here: Global includes (as the line below)
 INCLUDES += -Itools # for r3_info.h
