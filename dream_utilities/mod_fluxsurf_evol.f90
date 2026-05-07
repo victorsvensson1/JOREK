@@ -141,6 +141,9 @@ contains
 
     ierr = 0
 
+    if (allocated(result)) deallocate(result)
+    if (allocated(res0d))  deallocate(res0d)
+
     name_psi = 'Psi_N'
     desc_psi = 'normalized poloidal magnetic flux'
 

@@ -32,6 +32,7 @@ use mod_impurity, only: radiation_function, radiation_function_linear
 use mod_sources
 use mod_model_settings
 use mod_plasma_functions
+use mod_dream_input, only: interp_dream_jre !for dream coupling
 
 implicit none
 
@@ -1056,6 +1057,9 @@ do i=1,n_vertex_max
 
           ! --- Normalized poloidal flux
           psi_norm = get_psi_n( ps0, y_g(ms,mt))
+
+          ! --- jre from dream coupling
+          aux_jre = interp_dream_jre(psi_norm, sqrt(BB2))
           
           ! --- Hyper-resistivity
           call hyper_resistivity(T_or_Te, T_or_Te_corr, T_or_Te_0, psi_norm, eta_num_T, deta_num_dT) 

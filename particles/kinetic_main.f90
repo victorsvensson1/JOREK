@@ -263,7 +263,7 @@ call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.fals
 
 ! Call one subroutine to do all actions for the DREAM communication
 
-allocate(PsiN_list(50))
+allocate(PsiN_list(6))
 do k = 1, size(PsiN_list)
     PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(size(PsiN_list)-1, 8)
 end do
