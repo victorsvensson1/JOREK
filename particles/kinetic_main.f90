@@ -44,7 +44,8 @@ use mod_initialise_particles
 use equil_info
 use mod_output_file_routines, only: write_to_outputfile
 use mod_expression
-use mod_com_dream, only: com_dream, init_dream_coupling
+use mod_com_dream, only: com_dream, init_dream_coupling, restart_dream_coupling
+use mod_dream_input, only: read_psin_from_file
 use mod_impurity, only: init_imp_adas
 
 use phys_module, only: index_now
@@ -77,7 +78,7 @@ type(edge_elements)                               :: edge_elm_template
 type(particle_puffing)                            :: gas_puff, gas_puff2
 character(len=50)                                 :: rst_part_file
 
-real*8    :: rho_norm, t_norm, n_norm
+real*8    :: rho_norm, t_norm, n_norm, t
 
 integer   :: n_reflect
 integer   :: i, j, istep_inner_loop, group_num, config_num, valve_num, n_lcm_blocks, inner_stepsize
@@ -264,16 +265,55 @@ call write_to_outputfile(sim,"Starting main loop",next_block_write_conserv=.fals
 ! Call one subroutine to do all actions for the DREAM communication
 
 allocate(PsiN_list(6))
-do k = 1, size(PsiN_list)
-    PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(size(PsiN_list)-1, 8)
-end do
 
+! PsiN_list is updated every step by field-line tracing in com_dream() and
+! is not part of JOREK's own restart file. On a restart, reload it from the
+! same DREAM sidecar file used by restart_dream_coupling() (JOREK_DREAM_
+! RESTART_FILE), so tracing continues from wherever the flux surfaces had
+! actually drifted to, rather than silently resetting to the initial
+! evenly-spaced guess below.
+block
+    character(len=1024) :: psin_restart_file
+    real*8, allocatable  :: psin_loaded(:)
+    integer :: my_id_psin, ierr_mpi_psin, ierr_psin, len_env_psin, stat_env_psin
 
+    call MPI_Comm_rank(MPI_COMM_WORLD, my_id_psin, ierr_mpi_psin)
+
+    if (my_id_psin == 0) then
+        call get_environment_variable('JOREK_DREAM_RESTART_FILE', psin_restart_file, len_env_psin, stat_env_psin)
+    end if
+    call MPI_Bcast(stat_env_psin, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr_mpi_psin)
+    call MPI_Bcast(len_env_psin,  1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr_mpi_psin)
+
+    ierr_psin = 1
+    if (stat_env_psin == 0 .and. len_env_psin > 0) then
+        if (my_id_psin == 0) then
+            call read_psin_from_file(trim(psin_restart_file), psin_loaded, ierr_psin)
+            if (ierr_psin /= 0) then
+                write(*,*) 'ERROR: could not load PsiN_list from ', trim(psin_restart_file), &
+                           ' -- falling back to default evenly-spaced targets'
+            end if
+        end if
+        call MPI_Bcast(ierr_psin, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr_mpi_psin)
+    end if
+
+    if (ierr_psin == 0) then
+        if (my_id_psin /= 0) allocate(psin_loaded(size(PsiN_list)))
+        call MPI_Bcast(psin_loaded, size(PsiN_list), MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr_mpi_psin)
+        PsiN_list = psin_loaded
+        if (my_id_psin == 0) write(*,*) '>>> PsiN_list restored from restart file: ', PsiN_list
+    else
+        do k = 1, size(PsiN_list)
+            PsiN_list(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(size(PsiN_list)-1, 8)
+        end do
+    end if
+end block
 
 
 sim%stop_now = .false.
 
 call init_dream_coupling()
+call restart_dream_coupling()
 
 do while (.not. sim%stop_now)
   sim%istep_fluid = sim%istep_fluid + 1

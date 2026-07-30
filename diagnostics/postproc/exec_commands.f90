@@ -23,6 +23,7 @@ module exec_commands
   use mod_impurity, only: init_imp_adas 
   use mod_model_settings
   use mod_atomic_coeff_deuterium, only : ad_deuterium 
+  use mod_dream_input, only: load_dream_output_from_file
 
   implicit none
   
@@ -225,6 +226,21 @@ module exec_commands
           call select_loop_si_units(command, ierr)
         case ( 'RHS_terms_vtk' )
           call RHS_terms_vtk(command, first_step, ierr)
+        case ('RHS_terms_vtk_dream')
+          ! Usage:
+          !   RHS_terms_vtk_dream <dream_file.h5>                  -> all equations
+          !   RHS_terms_vtk_dream <equation_index> <dream_file.h5> -> one equation
+          block
+              type(type_command) :: command_for_rhs
+              call load_dream_output_from_file(trim(command%args(command%n_args)), ierr)
+              if (ierr /= 0) then
+                  write(*,*) 'ERROR: could not load DREAM output file'
+              else
+                  command_for_rhs        = command          ! plain derived-type copy — no allocatable/pointer fields
+                  command_for_rhs%n_args = command%n_args - 1
+                  call RHS_terms_vtk(command_for_rhs, first_step, ierr)
+              end if
+          end block
         case ( 'spi-state' )
           call spi_state(command, first_step, ierr)
         case ( 'shards' )
@@ -246,7 +262,7 @@ module exec_commands
           'gourdon', 'jorek-units', 'jnorm_bnd_curr', 'si-units', 'grid', 'grid_diagnostics',      &
           'rectangle', 'rectangular_torus', 'energy_spectrum', 'average_h5', 'I_halo_TPF',         &
           'spi-state', 'shards', 'zeroD_quantities', 'boundary_quantities', 'find_q_surface',      &
-          'midplane2d', 'expressions_four', 'RHS_terms_vtk')
+          'midplane2d', 'expressions_four', 'RHS_terms_vtk', 'RHS_terms_vtk_dream' )
           call add_to_command_queue(command, ierr)
         case ( 'help' )
           call help(command, ierr)

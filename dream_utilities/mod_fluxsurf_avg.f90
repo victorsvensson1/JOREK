@@ -37,17 +37,19 @@ contains
 
     ! --- Local variables
     integer :: units, npts, nsmall, i_exp, nmaxstep, NTht
+    integer :: i_T, i_ne, i_EdotB, i_B2, i_unity
     real*8  :: deltaphi, PsiNmin, PsiNmax
     type(t_pol_pos_list) :: pol_pos_list
     type(t_tor_pos_list) :: tor_pos_list
     type(t_expr_list) :: expr_list
-    character(len=16)  :: name_T, name_ne, name_Epar
-    character(len=128) :: desc_T, desc_ne, desc_Epar
+    character(len=16)  :: name_T, name_ne, name_EdotB, name_B2
+    character(len=128) :: desc_T, desc_ne, desc_EdotB, desc_B2
     real*8 :: conv_ne, conv_T, conv_E
-    real*8, allocatable :: result(:,:,:,:), res1d(:,:)
+    real*8, allocatable :: result(:,:,:,:), res1d(:,:), E_field(:)
 
     if (allocated(result)) deallocate(result)
     if (allocated(res1d)) deallocate(res1d)
+    if (allocated(E_field)) deallocate(E_field)
 
 
     ierr = 0
@@ -60,19 +62,28 @@ contains
     PsiNmax = psi_list(size(psi_list))
     nTht = max(150,6*n_plane)
     
-    name_T = 'T'
-    name_ne = 'ne'
-    name_Epar = 'E_||'
-    desc_T = 'temperature'
-    desc_ne = 'ne'
-    desc_Epar = 'parallel E field'
+    name_T     = 'T_e'
+    name_ne    = 'ne'
+    name_EdotB = 'EdotB'
+    name_B2    = 'B2'
+    desc_T     = 'electron temperature'
+    desc_ne    = 'ne'
+    desc_EdotB = 'E dot B (raw, for DREAM E_field)'
+    desc_B2    = 'B squared (raw, for DREAM E_field)'
 
-    call add(expr_list, name_T, desc_T)
-    call add(expr_list, name_ne, desc_ne)
-    call add(expr_list, name_Epar, desc_Epar)
+    call add(expr_list, name_T,     desc_T)
+    call add(expr_list, name_ne,    desc_ne)
+    call add(expr_list, name_EdotB, desc_EdotB)
+    call add(expr_list, name_B2,    desc_B2)
+
+    i_T     = 1
+    i_ne    = 2
+    i_EdotB = 3
+    i_B2    = 4
 
     if (present(flux_av)) then
       call add(expr_list, 'unity       ', 'Just unity, used to get R^2 average                   ')
+      i_unity = expr_list%n_expr
     endif
 
     pol_pos_list = pol_pos(node_list, element_list, ES, nPsiN=npts, nTht=nTht, nsmallsteps=nsmall, nmaxsteps=nmaxstep, deltaphi=deltaphi, PsiNmax=PsiNmax, PsiNmin=PsiNmin )
@@ -86,22 +97,29 @@ contains
     if (present(flux_av)) then 
       if (flux_av) then
         do i_exp=1, expr_list%n_expr
-          res1d(:,i_exp) = res1d(:,i_exp) / res1d(:,expr_list%n_expr)  ! Need to normalize for flux average
+          res1d(:,i_exp) = res1d(:,i_exp) / res1d(:,i_unity)  ! Need to normalize for flux average
         enddo
       endif      
     endif
 
     conv_T = 1.d0 / ( MU_zero * central_density * 1.d20 * EL_CHG )
-    conv_ne = 1.d20
+    conv_ne = central_density * 1.d20
     conv_E = 1.d0 / sqrt(MU_zero*central_density *1.d20 * central_mass * ATOMIC_MASS_UNIT)
-    res1d(:,1) = res1d(:,1) * conv_T
-    res1d(:,2) = res1d(:,2) * conv_ne
-    res1d(:,3) = res1d(:,3) * conv_E
+    res1d(:,i_T)  = res1d(:,i_T)  * conv_T
+    res1d(:,i_ne) = res1d(:,i_ne) * conv_ne
 
+    ! --- DREAM-consistent parallel E field:
+    !     E_field = <E.B> / sqrt(<B^2>)
+    ! res1d(:,i_EdotB) and res1d(:,i_B2) are already proper flux-surface
+    ! averages of the *raw* (JOREK-unit) quantities E.B and B^2 at this point.
+    allocate(E_field(size(res1d,1)))
+    E_field = conv_E * res1d(:,i_EdotB) / sqrt(res1d(:,i_B2))
 
-
-    allocate( avg_vals(size(res1d,1), size(res1d,2)) )
-    avg_vals = res1d
+    allocate( avg_vals(size(res1d,1), 3) )
+    avg_vals(:,1) = res1d(:,i_T)
+    avg_vals(:,2) = res1d(:,i_ne)
+    avg_vals(:,3) = E_field
+    
     
     end subroutine avg_fluxsurf_list
     

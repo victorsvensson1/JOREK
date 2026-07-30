@@ -10,14 +10,15 @@ module mod_com_dream
     use mod_computeB, only: comp_B_field
     use mod_save_flux_hdf5
     use mod_dream_input, only: set_dream_output, n_dream_psin, &
-                               dream_psin, dream_jre_par, dream_bmin
+                               dream_psin, dream_jre_par, dream_bmin, &
+                               load_dream_output_from_file
     use libmuscle
     use ymmsl
     use mpi
     implicit none
 
     private
-    public :: com_dream, init_dream_coupling, dream_instance
+    public :: com_dream, init_dream_coupling, restart_dream_coupling, dream_instance
 
     type(LIBMUSCLE_Instance), save :: dream_instance
     logical, save :: dream_particles_allocated = .false.
@@ -37,6 +38,61 @@ contains
             call LIBMUSCLE_PortsDescription_free(ports)
         end if
     end subroutine init_dream_coupling
+
+     subroutine restart_dream_coupling()
+        ! Primes the mod_dream_input cache (dream_psin/dream_jre_par/dream_bmin)
+        ! from a previous DREAM-side sidecar file when resuming a coupled run
+        ! from a JOREK restart file.
+        !
+        ! Without this, the cache starts empty on a fresh JOREK process (it is
+        ! not part of JOREK's own restart file, since it is only ever populated
+        ! by com_dream() *after* it has already sent the first post-restart
+        ! E_par to DREAM). That first E_par would then be computed with
+        ! aux_jre == 0, i.e. as if no runaway current existed yet, even though
+        ! by the restart point it may already be significant.
+        !
+        ! Set the JOREK_DREAM_RESTART_FILE environment variable to the DREAM
+        ! sidecar file corresponding to the JOREK restart point (e.g.
+        ! dream_outputs/output_001050_jorek.h5) before launching a restarted
+        ! coupled run. Leave it unset for a fresh start; this is then a no-op.
+        character(len=1024) :: restart_file
+        integer :: my_id, ierr, ierr_mpi, len_env, stat_env
+
+        call MPI_Comm_rank(MPI_COMM_WORLD, my_id, ierr)
+
+        if (my_id == 0) then
+            call get_environment_variable('JOREK_DREAM_RESTART_FILE', restart_file, len_env, stat_env)
+            if (stat_env == 0 .and. len_env > 0) then
+                write(*,*) '>>> restart_dream_coupling: loading ', trim(restart_file)
+                call load_dream_output_from_file(trim(restart_file), ierr)
+                if (ierr /= 0) then
+                    write(*,*) 'ERROR: restart_dream_coupling failed to load ', trim(restart_file)
+                    n_dream_psin = 0
+                else
+                    write(*,*) '>>> restart_dream_coupling: primed with n_pts=', n_dream_psin
+                end if
+            else
+                write(*,*) '>>> restart_dream_coupling: JOREK_DREAM_RESTART_FILE not set (stat=', &
+                           stat_env, ', len=', len_env, ') — starting with empty DREAM cache'
+                n_dream_psin = 0
+            end if
+        end if
+
+        call MPI_Bcast(n_dream_psin, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr_mpi)
+        if (n_dream_psin > 0) then
+            if (my_id /= 0) then
+                if (allocated(dream_psin))    deallocate(dream_psin)
+                if (allocated(dream_jre_par)) deallocate(dream_jre_par)
+                if (allocated(dream_bmin))    deallocate(dream_bmin)
+                allocate(dream_psin(n_dream_psin))
+                allocate(dream_jre_par(n_dream_psin))
+                allocate(dream_bmin(n_dream_psin))
+            end if
+            call MPI_Bcast(dream_psin,    n_dream_psin, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr_mpi)
+            call MPI_Bcast(dream_jre_par, n_dream_psin, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr_mpi)
+            call MPI_Bcast(dream_bmin,    n_dream_psin, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, ierr_mpi)
+        end if
+    end subroutine restart_dream_coupling
 
 
     subroutine com_dream(sim, ES, PsiN_list)
@@ -66,6 +122,9 @@ contains
         real(kind=8) :: psi_end
         logical :: flux_av
 
+        type(particle_gc_relativistic), allocatable :: trace_particles(:)
+        real(kind=8), parameter :: electron_mass = 5.4857990907016d-4
+
         n_psi_surfaces = size(PsiN_list)
 
         if (sim%my_id /= 0) goto 999
@@ -91,24 +150,21 @@ contains
         end do
 
 
-        if (allocated(sim%groups(1)%particles)) deallocate(sim%groups(1)%particles)
-        allocate(particle_gc_relativistic :: sim%groups(1)%particles(size(PsiN_list)))
 
-        call initialise_on_flux_surfaces(sim, R_mat, Z_mat)
+        allocate(trace_particles(n_psi_surfaces))
+        call initialise_on_flux_surfaces(sim, trace_particles, R_mat, Z_mat)
 
         allocate(events_list(0))
         allocate(timesteps(1))
         timesteps = [1d-8]
-        call run_particle_trace(sim, timesteps, events_list, sim%time + sim%tstep_fluid_si)
+        call run_particle_trace(sim, trace_particles, electron_mass, timesteps, sim%time + sim%tstep_fluid_si)
 
-        select type (p => sim%groups(1)%particles)
-        type is (particle_gc_relativistic)
-            do s = 1, n_psi_surfaces
-                call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
-                                    p(s)%x, psi_end, ierr_m3)
-                PsiN_list(s) = psi_end
-            end do
-        end select
+
+        do s = 1, n_psi_surfaces
+            call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
+                                trace_particles(s)%x, psi_end, ierr_m3)
+            PsiN_list(s) = psi_end
+        end do
 
         n_theta = size(R_mat, 1)
         n_flat  = size(R_mat)
@@ -198,7 +254,7 @@ contains
 
         print *, ">>> com_dream: received j_re, n_pts=", n_dream_psin
 
-        deallocate(sim%groups(1)%particles, timesteps, events_list)
+        deallocate(trace_particles, timesteps, events_list)
         deallocate(Psi_list, theta_list, R_mat, Z_mat)
         deallocate(Br_mat, Bz_mat, Bphi_mat, avg_vals, r_mid_n)
         deallocate(R_flat, Z_flat, Br_flat, Bz_flat, Bphi_flat)

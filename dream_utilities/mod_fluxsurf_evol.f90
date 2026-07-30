@@ -20,106 +20,68 @@ module mod_fluxsurf_evol
 
 contains
 
-    subroutine initialise_on_flux_surfaces(sim, R_mat, Z_mat)
-        type(particle_sim), intent(inout) :: sim
-        real(kind=8), intent(in)          :: R_mat(:,:), Z_mat(:,:)
-        integer :: s, idx, n_psi, ifail
-        real(kind=8) :: r_start, z_start
-        real(kind=8), dimension(3) :: E, b, gradB, curlb, dbdt, B_star
+    subroutine initialise_on_flux_surfaces(sim, particles, R_mat, Z_mat)
+        type(particle_sim), intent(inout)              :: sim
+        type(particle_gc_relativistic), intent(inout)  :: particles(:)
+        real(kind=8), intent(in)                       :: R_mat(:,:), Z_mat(:,:)
+        integer :: s, n_psi, ifail
+        real(kind=8), dimension(3) :: E, b, gradB, curlb, dbdt
         real(kind=8) :: normB
 
-        ! We only care about the number of radial surfaces (n_psi)
         n_psi = size(R_mat, 2)
 
-        select type (p => sim%groups(1)%particles)
-        type is (particle_gc_relativistic)
-            idx = 0
-            ! Loop only over flux surfaces
-            do s = 1, n_psi
-                idx = idx + 1
-                
-                ! Use the first theta entry (theta = 0) for each surface
-                r_start = R_mat(1, s)
-                z_start = Z_mat(1, s)
-                
-                p(idx)%x(1) = r_start
-                p(idx)%x(2) = z_start
-                p(idx)%x(3) = 0.0d0
-                p(idx)%q = -1
-                p(idx)%i_elm = -1 
+        do s = 1, n_psi
+            particles(s)%x(1) = R_mat(1, s)
+            particles(s)%x(2) = Z_mat(1, s)
+            particles(s)%x(3) = 0.0d0
+            particles(s)%q    = -1
+            particles(s)%i_elm = -1
 
+            call find_RZ(sim%fields%node_list, sim%fields%element_list, &
+                        particles(s)%x(1), particles(s)%x(2), &
+                        particles(s)%x(1), particles(s)%x(2), &
+                        particles(s)%i_elm, &
+                        particles(s)%st(1), particles(s)%st(2), ifail)
 
-                call find_RZ(sim%fields%node_list, sim%fields%element_list, &
-                                p(idx)%x(1), p(idx)%x(2), &      ! Input R, Z for particle idx
-                                p(idx)%x(1), p(idx)%x(2), &      ! Dummy/Initial R, Z
-                                p(idx)%i_elm, &                  ! The specific particle's element
-                                p(idx)%st(1), p(idx)%st(2), &    ! The specific particle's local coords
-                                ifail)
-                
-                call sim%fields%calc_EBNormBGradBCurlbDbdt(sim%time,p(idx)%i_elm,p(idx)%st, p(idx)%x(3),E,b,normB,gradB,curlb,dbdt)
-                
-                print *, "E: ", E
-                print *, "dot_prod:", dot_product(E, b)
+            call sim%fields%calc_EBNormBGradBCurlbDbdt(sim%time, particles(s)%i_elm, &
+                        particles(s)%st, particles(s)%x(3), E, b, normB, gradB, curlb, dbdt)
 
-                if (ifail /= 0) then
-                    p(idx)%i_elm = -1
-                    print *, "Warning: Particle at surface ", s, " failed localization."
-                endif
-            end do
-            print *, "Initialized ", idx, " particles (one per flux surface at theta=0)."
-        end select
+            if (ifail /= 0) then
+                particles(s)%i_elm = -1
+                print *, "Warning: Particle at surface ", s, " failed localization."
+            endif
+        end do
+        print *, "Initialized ", n_psi, " particles (one per flux surface at theta=0)."
     end subroutine initialise_on_flux_surfaces
 
-    subroutine run_particle_trace(sim, timesteps, events, end_time)
-        type(particle_sim), intent(inout) :: sim
-        real(kind=8), intent(in)          :: timesteps(:), end_time
-        type(event), intent(inout)        :: events(:)
-        
+
+    subroutine run_particle_trace(sim, particles, mass, timesteps, end_time)
+        type(particle_sim), intent(inout)              :: sim
+        type(particle_gc_relativistic), intent(inout)  :: particles(:)
+        real(kind=8), intent(in)                       :: mass
+        real(kind=8), intent(in)                       :: timesteps(:), end_time
+
         real(kind=8)    :: local_time, t_step
         integer(kind=4) :: j, k, n_pushes, n_lost
 
-        n_lost = 0 
-        t_step = timesteps(1)
-        
-        ! Calculate total pushes required to reach end_time
-        ! Or you can set n_pushes to a fixed integer (e.g., 1000)
+        n_lost  = 0
+        t_step  = timesteps(1)
         n_pushes = ceiling((end_time - sim%time) / t_step)
-        print *, "Running particle trace for ", n_pushes, " pushes per particle to reach end time: ", end_time
+        print *, "Running particle trace for ", n_pushes, " pushes per particle"
 
-        select type (particles => sim%groups(1)%particles)
-        type is (particle_gc_relativistic)
-
-            !!$omp parallel do default(private) shared(sim, t_step, n_pushes) reduction(+:n_lost)
-            do j = 1, size(particles, 1)
-                if (particles(j)%i_elm <= 0) cycle 
-
-                local_time = sim%time
-
-                ! Inner Loop: Perform exactly N pushes for particle j
-                do k = 1, n_pushes
-                    
-                    call runge_kutta_fixed_dt_gc_push_jorek(sim%fields, local_time, t_step, sim%groups(1)%mass, particles(j))
-                    
-                    local_time = local_time + t_step
-
-                    ! If particle is lost, stop pushing it and move to next particle (j+1)
-                    if (particles(j)%i_elm <= 0) then
-                        n_lost = n_lost + 1
-                        exit 
-                    end if
-                end do
+        do j = 1, size(particles, 1)
+            if (particles(j)%i_elm <= 0) cycle
+            local_time = sim%time
+            do k = 1, n_pushes
+                call runge_kutta_fixed_dt_gc_push_jorek(sim%fields, local_time, t_step, mass, particles(j))
+                local_time = local_time + t_step
+                if (particles(j)%i_elm <= 0) then
+                    n_lost = n_lost + 1
+                    exit
+                end if
             end do
-            !!$omp end parallel do
-
-        end select
-
-        ! Update global simulation time based on the steps taken
-        !sim%time = sim%time + (n_pushes * t_step)
-
-        print *, "Tracing complete."
-        print *, "Pushes per particle:", n_pushes
-        print *, "Total particles lost:", n_lost
-        print *, "Current simulation time:", sim%time
+        end do
+        print *, "Tracing complete. Lost:", n_lost
     end subroutine run_particle_trace
 
     subroutine get_psi_at_pos(ES, node_list, element_list, x, psi, ierr)

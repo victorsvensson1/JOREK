@@ -26,6 +26,7 @@ module mod_expression
   use mod_impurity, only: radiation_function, radiation_function_linear
   use mod_atomic_coeff_deuterium, only : atomic_coeff_deuterium
   use mod_plasma_functions
+  use mod_dream_input, only: interp_dream_jre !for dream coupling
 
   implicit none
   
@@ -201,6 +202,8 @@ module mod_expression
     call add(exprs_all, 'T_e         ', 'Electron temperature                                  ')
     call add(exprs_all, 'T_i         ', 'Ion temperature                                       ')
     call add(exprs_all, 'E_||        ', 'E_|| for RE acceleration                              ')
+    call add(exprs_all, 'EdotB       ', 'E dot B (raw JOREK units, for DREAM E_field)          ')
+    call add(exprs_all, 'B2          ', 'B^2 (raw JOREK units, for DREAM E_field)              ')
     call add(exprs_all, 'E_crit      ', 'E_crit for RE avalanching (Connor-Hastie)             ')
     call add(exprs_all, 'E_dreicer   ', 'Electrical field for Dreicer RE primary source        ')
     call add(exprs_all, 'theta_geo   ', 'Polar angle with respect to Rgeo, Zgeo                ')
@@ -634,6 +637,8 @@ module mod_expression
     real*8  :: rn0, rn0_s, rn0_t, rn0_ss, rn0_tt, rn0_st, rn0_p, rn0_pp, rn0_R, rn0_Z
     real*8  :: rimp0, rimp0_s, rimp0_t, rimp0_ss, rimp0_tt, rimp0_st, rimp0_p, rimp0_pp, rimp0_R, rimp0_Z
     real*8  :: flux_av_fact
+
+    real*8 :: aux_jre !for dream coupling
 
 #if (defined WITH_Neutrals) || (defined WITH_Impurities)
     real*8  :: Te_corr_eV, Te_eV
@@ -1653,7 +1658,8 @@ module mod_expression
           ExB_norm  = -dpsi_dt * (ps0_R*nmlR + ps0_Z*nmlZ) / (BigR**2.d0)   
           !E_par     = - R * ( eta_T * zj0 / !R**2                                                       &
           !              + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
-          E_par = - F0/sqrt(BB2) * ( ( eta_T/BigR**2 * zj0 ) + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
+          aux_jre = interp_dream_jre(psi_norm, sqrt(BB2), BigR)
+          E_par = - F0/sqrt(BB2) * ( ( eta_T/BigR**2 * (zj0 - aux_jre) ) + 2.d0*tauIC / r0 * ( (Pi0_R * Ps0_Z - Pi0_Z * Ps0_R) / R + F0 * Pi0_p / R**2 ) )
 
           ! --- Factors for switching between JOREK normalized and SI units.
           if ( units == SI_UNITS ) then
@@ -1990,6 +1996,12 @@ module mod_expression
                 
               case ( 'E_||' )
                 res = E_par / fact_time
+              
+              case ( 'EdotB' )
+                res = E_par * sqrt(BB2)
+
+              case ( 'B2' )
+                res = BB2
                 
               case ( 'E_crit' )
                 res = E_crit / fact_time

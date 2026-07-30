@@ -1058,8 +1058,6 @@ do i=1,n_vertex_max
           ! --- Normalized poloidal flux
           psi_norm = get_psi_n( ps0, y_g(ms,mt))
 
-          ! --- jre from dream coupling
-          aux_jre = interp_dream_jre(psi_norm, sqrt(BB2))
           
           ! --- Hyper-resistivity
           call hyper_resistivity(T_or_Te, T_or_Te_corr, T_or_Te_0, psi_norm, eta_num_T, deta_num_dT) 
@@ -1419,6 +1417,10 @@ do i=1,n_vertex_max
 
             BB2              = (F0*F0 + ps0_x * ps0_x + ps0_y * ps0_y )/BigR**2
             Btheta2          = (ps0_x * ps0_x + ps0_y * ps0_y )/BigR**2
+
+            ! --- jre from dream coupling
+            aux_jre = interp_dream_jre(psi_norm, sqrt(BB2), BigR)
+            if (.not. keep_current_prof) aux_jre_ind = aux_jre
 
             v_ps0_x  = v_xx  * ps0_y - v_xy  * ps0_x + v_x  * ps0_xy - v_y * ps0_xx
             v_ps0_y  = v_xy  * ps0_y - v_yy  * ps0_x + v_x  * ps0_yy - v_y * ps0_xy
