@@ -37,13 +37,13 @@ contains
 
     ! --- Local variables
     integer :: units, npts, nsmall, i_exp, nmaxstep, NTht
-    integer :: i_T, i_ne, i_EdotB, i_B2, i_unity
+    integer :: i_T, i_ne, i_EdotB, i_B2, i_Zeff, i_unity
     real*8  :: deltaphi, PsiNmin, PsiNmax
     type(t_pol_pos_list) :: pol_pos_list
     type(t_tor_pos_list) :: tor_pos_list
     type(t_expr_list) :: expr_list
-    character(len=16)  :: name_T, name_ne, name_EdotB, name_B2
-    character(len=128) :: desc_T, desc_ne, desc_EdotB, desc_B2
+    character(len=16)  :: name_T, name_ne, name_EdotB, name_B2, name_Zeff
+    character(len=128) :: desc_T, desc_ne, desc_EdotB, desc_B2, desc_Zeff
     real*8 :: conv_ne, conv_T, conv_E
     real*8, allocatable :: result(:,:,:,:), res1d(:,:), E_field(:)
 
@@ -57,7 +57,7 @@ contains
     npts = size(psi_list)
     nsmall = 3
     nmaxstep = 2500
-    deltaphi = 0.3
+    deltaphi = 0.15
     PsiNmin = psi_list(1)
     PsiNmax = psi_list(size(psi_list))
     nTht = max(150,6*n_plane)
@@ -66,20 +66,24 @@ contains
     name_ne    = 'ne'
     name_EdotB = 'EdotB'
     name_B2    = 'B2'
+    name_Zeff  = 'Z_eff'
     desc_T     = 'electron temperature'
     desc_ne    = 'ne'
     desc_EdotB = 'E dot B (raw, for DREAM E_field)'
     desc_B2    = 'B squared (raw, for DREAM E_field)'
+    desc_Zeff  = 'Effective charge (raw, for DREAM ions)'
 
     call add(expr_list, name_T,     desc_T)
     call add(expr_list, name_ne,    desc_ne)
     call add(expr_list, name_EdotB, desc_EdotB)
     call add(expr_list, name_B2,    desc_B2)
+    call add(expr_list, name_Zeff,  desc_Zeff)
 
     i_T     = 1
     i_ne    = 2
     i_EdotB = 3
     i_B2    = 4
+    i_Zeff  = 5
 
     if (present(flux_av)) then
       call add(expr_list, 'unity       ', 'Just unity, used to get R^2 average                   ')
@@ -115,11 +119,12 @@ contains
     allocate(E_field(size(res1d,1)))
     E_field = conv_E * res1d(:,i_EdotB) / sqrt(res1d(:,i_B2))
 
-    allocate( avg_vals(size(res1d,1), 3) )
+    allocate( avg_vals(size(res1d,1), 4) )
     avg_vals(:,1) = res1d(:,i_T)
     avg_vals(:,2) = res1d(:,i_ne)
     avg_vals(:,3) = E_field
-    
+    avg_vals(:,4) = res1d(:,i_Zeff)
+
     
     end subroutine avg_fluxsurf_list
     

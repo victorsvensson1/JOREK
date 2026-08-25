@@ -1419,7 +1419,7 @@ do i=1,n_vertex_max
             Btheta2          = (ps0_x * ps0_x + ps0_y * ps0_y )/BigR**2
 
             ! --- jre from dream coupling
-            aux_jre = interp_dream_jre(psi_norm, sqrt(BB2), BigR)
+            aux_jre = interp_dream_jre(psi_norm, sqrt(BB2), BigR, F0)
             if (.not. keep_current_prof) aux_jre_ind = aux_jre
 
             v_ps0_x  = v_xx  * ps0_y - v_xy  * ps0_x + v_x  * ps0_xy - v_y * ps0_xx

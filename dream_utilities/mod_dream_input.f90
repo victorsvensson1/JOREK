@@ -4,7 +4,7 @@ module mod_dream_input
 
     private
     public :: set_dream_output, interp_dream_jre, n_dream_psin, load_dream_output_from_file
-    public :: dream_psin, dream_jre_par, dream_bmin, read_psin_from_file
+    public :: dream_psin, dream_jre_par, dream_bmin
 
     integer, save :: n_dream_psin = 0
     real*8, allocatable, save :: dream_psin(:)
@@ -45,38 +45,6 @@ contains
         ierr = 0
     end subroutine load_dream_output_from_file
 
-    subroutine read_psin_from_file(filename, psin_out, ierr)
-        ! Reads just the jorek/psi_n dataset from a DREAM-side sidecar file,
-        ! for restoring PsiN_list (the flux-surface targets traced by
-        ! com_dream) across a JOREK restart. PsiN_list evolves every step via
-        ! field-line tracing and, like the dream_* cache above, is not part
-        ! of JOREK's own restart file — without this, a restarted run would
-        ! silently start tracing from the original evenly-spaced guess
-        ! instead of wherever the flux surfaces had actually drifted to.
-        use hdf5_io_module
-        character(len=*), intent(in) :: filename
-        real*8, allocatable, intent(out) :: psin_out(:)
-        integer, intent(out) :: ierr
-        integer(HID_T) :: file_id
-
-        call HDF5_open(filename, file_id, ierr)
-        if (ierr /= 0) return
-
-        call HDF5_allocatable_array1D_reading(file_id, psin_out, 'jorek/psi_n')
-
-        call HDF5_close(file_id)
-
-        if (.not. allocated(psin_out)) then
-            write(*,*) 'ERROR: failed to read jorek/psi_n from ', trim(filename)
-            ierr = 1
-            return
-        end if
-
-        ierr = 0
-    end subroutine read_psin_from_file
-
-
-
     subroutine set_dream_output(psin_arr, jre_arr, bmin_arr, n_pts)
         integer, intent(in) :: n_pts
         real*8,  intent(in) :: psin_arr(n_pts)
@@ -100,10 +68,11 @@ contains
     end subroutine set_dream_output
 
 
-    function interp_dream_jre(psi_norm_jorek, B_local, R_local) result(jre)
+    function interp_dream_jre(psi_norm_jorek, B_local, R_local, F0_local) result(jre)
         real*8, intent(in) :: psi_norm_jorek
         real*8, intent(in) :: B_local
         real*8, intent(in) :: R_local   ! local major radius, matches zj0's R-scaling convention
+        real*8, intent(in) :: F0_local  ! R*B_phi (toroidal field function) at the local point
         real*8 :: jre
 
         integer :: i
@@ -135,9 +104,8 @@ contains
         end if
 
         if (bmin_interp > 0.d0) then
-            ! dream_jre_par is expected in raw SI units [A/m^2] here — MU_ZERO
-            ! and R_local convert it into JOREK's normalized zj0-like units.
-            jre = (B_local / bmin_interp) * jre_dream * R_local * MU_ZERO
+            !jre = (B_local / bmin_interp) * jre_dream * R_local * MU_ZERO
+            jre = jre_dream * MU_ZERO * abs(F0_local) / (bmin_interp * R_local)
         else
             jre = 0.d0
         end if
