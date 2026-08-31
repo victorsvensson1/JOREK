@@ -6,7 +6,7 @@ implicit none
 logical, parameter :: with_vpar       = .false.
 logical, parameter :: with_TiTe       = .false.
 logical, parameter :: with_neutrals   = .false. 
-logical, parameter :: with_impurities = .false.
+logical, parameter :: with_impurities = .true.
 logical, parameter :: with_refluid    = .false. ! not yet possible to switch
 
 
@@ -74,7 +74,7 @@ logical, parameter :: unified_element_matrix = .true.
 
 !> parameters for naming equation terms in the RHS diagnostic 
 integer,  parameter :: max_terms    = 26
-integer,  parameter :: n_terms_psi  = 5
+integer,  parameter :: n_terms_psi  = 6
 integer,  parameter :: n_terms_u    = 12
 integer,  parameter :: n_terms_zj   = 1
 integer,  parameter :: n_terms_w    = 1
@@ -92,7 +92,8 @@ character*36, dimension(n_terms_psi),  parameter :: Psi_term_names=  &
                                                  'psi_Eq__B.grad_u         ', &  ! 2: \mathbf{B}\cdot\nabla u 
                                                  'psi_Eq__eta_num_term     ', &  ! 3: \eta_{num}\nabla^2 j 
                                                  'psi_Eq__diamag_term      ', &  ! 4: \mathbf{B}\cdot\nabla p
-                                                 'psi_Eq__zeta_timevol_term'/)   ! 5: \zeta\delta\psi
+                                                 'psi_Eq__zeta_timevol_term', &  ! 5: \zeta\delta\psi
+                                                 'aux_jre                  '/)   ! 6: auxiliary term for j_re
 
 character*36, dimension(n_terms_u),     parameter :: u_term_names=  &
                                               (/ 'u_Eq__rho_v.grad_v     ', &  !  1:

@@ -40,21 +40,7 @@ contains
     end subroutine init_dream_coupling
 
      subroutine restart_dream_coupling()
-        ! Primes the mod_dream_input cache (dream_psin/dream_jre_par/dream_bmin)
-        ! from a previous DREAM-side sidecar file when resuming a coupled run
-        ! from a JOREK restart file.
-        !
-        ! Without this, the cache starts empty on a fresh JOREK process (it is
-        ! not part of JOREK's own restart file, since it is only ever populated
-        ! by com_dream() *after* it has already sent the first post-restart
-        ! E_par to DREAM). That first E_par would then be computed with
-        ! aux_jre == 0, i.e. as if no runaway current existed yet, even though
-        ! by the restart point it may already be significant.
-        !
-        ! Set the JOREK_DREAM_RESTART_FILE environment variable to the DREAM
-        ! sidecar file corresponding to the JOREK restart point (e.g.
-        ! dream_outputs/output_001050_jorek.h5) before launching a restarted
-        ! coupled run. Leave it unset for a fresh start; this is then a no-op.
+
         character(len=1024) :: restart_file
         integer :: my_id, ierr, ierr_mpi, len_env, stat_env
 
@@ -95,112 +81,150 @@ contains
     end subroutine restart_dream_coupling
 
 
-    subroutine com_dream(sim, ES, PsiN_list)
+    subroutine com_dream(sim, ES, n_psi_surfaces)
+        logical           :: disable_tracing
+        character(len=8)  :: env_disable_tracing
+        integer           :: len_env_dt, stat_env_dt
         type(particle_sim), intent(inout) :: sim
         type(t_equil_state), intent(in)   :: ES
-        real(kind=8), intent(inout)       :: PsiN_list(:)
-
-        real(kind=8), allocatable :: Psi_list(:), theta_list(:)
-        real(kind=8), allocatable :: R_mat(:,:), Z_mat(:,:)
-        real(kind=8), allocatable :: Br_mat(:,:), Bz_mat(:,:), Bphi_mat(:,:)
+        integer, intent(in)              :: n_psi_surfaces
         real(kind=8), allocatable :: avg_vals(:,:), timesteps(:)
         real(kind=8), allocatable :: r_mid_n(:)
-        real(kind=8), allocatable :: R_flat(:), Z_flat(:)
-        real(kind=8), allocatable :: Br_flat(:), Bz_flat(:), Bphi_flat(:)
         real(kind=8), allocatable :: recv_jre(:), recv_bmin(:)
         type(event), allocatable  :: events_list(:)
 
+        !These are def on the fixed Psi_N grid, which is used to compute the flux surface data and send to DREAM
+        real(kind=8), allocatable :: PsiN_geom(:), Psi_list_geom(:), theta_list_geom(:)
+        real(kind=8), allocatable :: R_mat_geom(:,:), Z_mat_geom(:,:)
+        real(kind=8), allocatable :: Br_mat_geom(:,:), Bz_mat_geom(:,:), Bphi_mat_geom(:,:)
+        real(kind=8), allocatable :: R_flat_geom(:), Z_flat_geom(:)
+        real(kind=8), allocatable :: Br_flat_geom(:), Bz_flat_geom(:), Bphi_flat_geom(:)
+        integer :: n_theta_geom, n_flat_geom, ierr_geom
+
+        real(kind=8), allocatable :: psin_mapped(:)
+        type(LIBMUSCLE_Data)      :: d_psin_mapped
+
         type(LIBMUSCLE_Message)      :: send_msg, recv_msg
         type(LIBMUSCLE_Data)         :: send_data
-        type(LIBMUSCLE_Data)         :: d_theta, d_psin, d_T, d_ne, d_Epar, d_rmid
+        type(LIBMUSCLE_Data)         :: d_theta, d_psin, d_T, d_ne, d_Epar, d_rmid, d_Zeff
         type(LIBMUSCLE_Data)         :: d_Rax, d_Zax, d_amin, d_dt, d_istep
         type(LIBMUSCLE_Data)         :: d_ntheta, d_Rmat, d_Zmat
         type(LIBMUSCLE_Data)         :: d_Brmat, d_Bzmat, d_Bphimat, d_Psilist
         type(LIBMUSCLE_DataConstRef) :: recv_ref, ref_jre, ref_bmin
 
-        integer :: ierr_m3, ierr_mpi, k, s, n_psi_surfaces, n_theta, n_flat
+        integer :: ierr_m3, ierr_mpi, k, s
         real(kind=8) :: psi_end
         logical :: flux_av
 
         type(particle_gc_relativistic), allocatable :: trace_particles(:)
         real(kind=8), parameter :: electron_mass = 5.4857990907016d-4
 
-        n_psi_surfaces = size(PsiN_list)
 
         if (sim%my_id /= 0) goto 999
 
+        call get_environment_variable('JOREK_DREAM_DISABLE_TRACING', env_disable_tracing, len_env_dt, stat_env_dt)
+        disable_tracing = (stat_env_dt == 0 .and. len_env_dt > 0 .and. trim(env_disable_tracing) == '1')
+
         print *, ">>> com_dream: computing flux surface data <<<"
 
-        allocate(Psi_list(n_psi_surfaces))
+        allocate(PsiN_geom(n_psi_surfaces))
+        allocate(Psi_list_geom(n_psi_surfaces))
         do k = 1, n_psi_surfaces
-            Psi_list(k) = ES%psi_axis + PsiN_list(k) * (ES%psi_bnd - ES%psi_axis)
+            PsiN_geom(k) = 0.001d0 + (k-1) * (0.999d0 - 0.001d0) / real(n_psi_surfaces-1, 8)
+            Psi_list_geom(k) = ES%psi_axis + PsiN_geom(k) * (ES%psi_bnd - ES%psi_axis)
         end do
 
         flux_av = .true.
         call avg_fluxsurf_list(ES, sim%fields%node_list, sim%fields%element_list, &
-                               PsiN_list, avg_vals, flux_av, ierr_m3)
+                               PsiN_geom, avg_vals, flux_av, ierr_m3)
         call fluxsurface(ES, sim%fields%node_list, sim%fields%element_list, &
-                         PsiN_list, R_mat, Z_mat, theta_list, ierr_m3)
+                         PsiN_geom, R_mat_geom, Z_mat_geom, theta_list_geom, ierr_geom)
         call comp_B_field(ES, sim%fields%node_list, sim%fields%element_list, &
-                          R_mat, Z_mat, Br_mat, Bz_mat, Bphi_mat, ierr_m3)
+                          R_mat_geom, Z_mat_geom, Br_mat_geom, Bz_mat_geom, Bphi_mat_geom, ierr_geom)
 
         allocate(r_mid_n(n_psi_surfaces))
         do s = 1, n_psi_surfaces
-            r_mid_n(s) = R_mat(1, s) - ES%R_axis
+            r_mid_n(s) = R_mat_geom(1, s) - ES%R_axis
         end do
 
 
 
         allocate(trace_particles(n_psi_surfaces))
-        call initialise_on_flux_surfaces(sim, trace_particles, R_mat, Z_mat)
 
         allocate(events_list(0))
         allocate(timesteps(1))
-        timesteps = [1d-8]
-        call run_particle_trace(sim, trace_particles, electron_mass, timesteps, sim%time + sim%tstep_fluid_si)
+        timesteps = [1d-9]
 
+        if (disable_tracing) then
+            allocate(psin_mapped(n_psi_surfaces))
+            psin_mapped = PsiN_geom
+            print *, ">>> com_dream: flux-surface tracing DISABLED ", &
+                     "(JOREK_DREAM_DISABLE_TRACING=1) -- psin_mapped = PsiN_geom (identity) <<<"
+        else
+            call initialise_on_flux_surfaces(sim, trace_particles, R_mat_geom, Z_mat_geom)
 
-        do s = 1, n_psi_surfaces
-            call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
-                                trace_particles(s)%x, psi_end, ierr_m3)
-            PsiN_list(s) = psi_end
-        end do
+            if (sim%istep_fluid > 1) then
+                select type (fields => sim%fields)
+                type is (jorek_fields_interp_linear)
+                    call run_particle_trace(sim, trace_particles, electron_mass, timesteps, &
+                                            fields%time_prev, fields%time_now)
+                end select
+            end if
 
-        n_theta = size(R_mat, 1)
-        n_flat  = size(R_mat)
-        allocate(R_flat(n_flat), Z_flat(n_flat), Br_flat(n_flat), &
-                 Bz_flat(n_flat), Bphi_flat(n_flat))
-        R_flat    = reshape(R_mat,    [n_flat])
-        Z_flat    = reshape(Z_mat,    [n_flat])
-        Br_flat   = reshape(Br_mat,   [n_flat])
-        Bz_flat   = reshape(Bz_mat,   [n_flat])
-        Bphi_flat = reshape(Bphi_mat, [n_flat])
+            allocate(psin_mapped(n_psi_surfaces))
+            do s = 1, n_psi_surfaces
+                call get_psi_at_pos(ES, sim%fields%node_list, sim%fields%element_list, &
+                                    trace_particles(s)%x, psi_end, ierr_m3)
+                psin_mapped(s) = psi_end
+            end do
 
-        d_theta   = LIBMUSCLE_Data_create_grid_1_real8_a(theta_list)
-        d_psin    = LIBMUSCLE_Data_create_grid_1_real8_a(PsiN_list)
+            print *, ">>> com_dream: flux-surface tracing results (start psiN -> mapped psiN) <<<"
+            do s = 1, n_psi_surfaces
+                write(*,'(A,I5,A,F18.14,A,F18.14)') '    s=', s, &
+                    '  psiN_start=', PsiN_geom(s), &
+                    '  psiN_mapped=', psin_mapped(s)
+            end do
+        end if
+
+        n_theta_geom = size(R_mat_geom, 1)
+        n_flat_geom  = size(R_mat_geom)
+        allocate(R_flat_geom(n_flat_geom), Z_flat_geom(n_flat_geom), Br_flat_geom(n_flat_geom), &
+                 Bz_flat_geom(n_flat_geom), Bphi_flat_geom(n_flat_geom))
+        R_flat_geom    = reshape(R_mat_geom,    [n_flat_geom])
+        Z_flat_geom    = reshape(Z_mat_geom,    [n_flat_geom])
+        Br_flat_geom   = reshape(Br_mat_geom,   [n_flat_geom])
+        Bz_flat_geom   = reshape(Bz_mat_geom,   [n_flat_geom])
+        Bphi_flat_geom = reshape(Bphi_mat_geom, [n_flat_geom])
+        d_theta   = LIBMUSCLE_Data_create_grid_1_real8_a(theta_list_geom)
+        d_psin    = LIBMUSCLE_Data_create_grid_1_real8_a(PsiN_geom)
+        d_psin_mapped = LIBMUSCLE_Data_create_grid_1_real8_a(psin_mapped)
+        d_Psilist = LIBMUSCLE_Data_create_grid_1_real8_a(Psi_list_geom)
+
         d_T       = LIBMUSCLE_Data_create_grid_1_real8_a(avg_vals(:,1))
         d_ne      = LIBMUSCLE_Data_create_grid_1_real8_a(avg_vals(:,2))
         d_Epar    = LIBMUSCLE_Data_create_grid_1_real8_a(avg_vals(:,3))
+        d_Zeff    = LIBMUSCLE_Data_create_grid_1_real8_a(avg_vals(:,4))
         d_rmid    = LIBMUSCLE_Data_create_grid_1_real8_a(r_mid_n)
-        d_Rmat    = LIBMUSCLE_Data_create_grid_1_real8_a(R_flat)
-        d_Zmat    = LIBMUSCLE_Data_create_grid_1_real8_a(Z_flat)
-        d_Brmat   = LIBMUSCLE_Data_create_grid_1_real8_a(Br_flat)
-        d_Bzmat   = LIBMUSCLE_Data_create_grid_1_real8_a(Bz_flat)
-        d_Bphimat = LIBMUSCLE_Data_create_grid_1_real8_a(Bphi_flat)
-        d_Psilist = LIBMUSCLE_Data_create_grid_1_real8_a(Psi_list)
+        d_Rmat    = LIBMUSCLE_Data_create_grid_1_real8_a(R_flat_geom)
+        d_Zmat    = LIBMUSCLE_Data_create_grid_1_real8_a(Z_flat_geom)
+        d_Brmat   = LIBMUSCLE_Data_create_grid_1_real8_a(Br_flat_geom)
+        d_Bzmat   = LIBMUSCLE_Data_create_grid_1_real8_a(Bz_flat_geom)
+        d_Bphimat = LIBMUSCLE_Data_create_grid_1_real8_a(Bphi_flat_geom)
         d_Rax    = LIBMUSCLE_Data_create_real8(ES%R_axis)
         d_Zax    = LIBMUSCLE_Data_create_real8(ES%Z_axis)
         d_amin   = LIBMUSCLE_Data_create_real8(abs(ES%LCFS_a))
         d_dt     = LIBMUSCLE_Data_create_real8(sim%tstep_fluid_si)
         d_istep  = LIBMUSCLE_Data_create_int8(int(sim%istep_fluid, kind=8))
-        d_ntheta = LIBMUSCLE_Data_create_int8(int(n_theta, kind=8))
+        d_ntheta = LIBMUSCLE_Data_create_int8(int(n_theta_geom, kind=8))
 
         send_data = LIBMUSCLE_Data_create_dict()
         call LIBMUSCLE_Data_set_item(send_data, 'theta',    d_theta)
         call LIBMUSCLE_Data_set_item(send_data, 'psi_n',    d_psin)
+        call LIBMUSCLE_Data_set_item(send_data, 'psi_n_mapped', d_psin_mapped)
         call LIBMUSCLE_Data_set_item(send_data, 'T',        d_T)
         call LIBMUSCLE_Data_set_item(send_data, 'ne',       d_ne)
         call LIBMUSCLE_Data_set_item(send_data, 'E_par',    d_Epar)
+        call LIBMUSCLE_Data_set_item(send_data, 'Zeff',     d_Zeff)
         call LIBMUSCLE_Data_set_item(send_data, 'r_mid_n',  d_rmid)
         call LIBMUSCLE_Data_set_item(send_data, 'R_axis',   d_Rax)
         call LIBMUSCLE_Data_set_item(send_data, 'Z_axis',   d_Zax)
@@ -229,6 +253,7 @@ contains
         call LIBMUSCLE_Data_free(d_Rmat);    call LIBMUSCLE_Data_free(d_Zmat)
         call LIBMUSCLE_Data_free(d_Brmat);   call LIBMUSCLE_Data_free(d_Bzmat)
         call LIBMUSCLE_Data_free(d_Bphimat); call LIBMUSCLE_Data_free(d_Psilist)
+        call LIBMUSCLE_Data_free(d_Zeff);    call LIBMUSCLE_Data_free(d_psin_mapped)
 
         ! 8. Receive j_re and Bmin from DREAM
         recv_msg = LIBMUSCLE_Instance_receive(dream_instance, 'jre_in')
@@ -245,7 +270,7 @@ contains
 
         call LIBMUSCLE_Message_free(recv_msg)
 
-        call set_dream_output(psin_arr  = PsiN_list, &
+        call set_dream_output(psin_arr  = PsiN_geom, &
                               jre_arr   = recv_jre,  &
                               bmin_arr  = recv_bmin, &
                               n_pts     = n_dream_psin)
@@ -255,9 +280,10 @@ contains
         print *, ">>> com_dream: received j_re, n_pts=", n_dream_psin
 
         deallocate(trace_particles, timesteps, events_list)
-        deallocate(Psi_list, theta_list, R_mat, Z_mat)
-        deallocate(Br_mat, Bz_mat, Bphi_mat, avg_vals, r_mid_n)
-        deallocate(R_flat, Z_flat, Br_flat, Bz_flat, Bphi_flat)
+        deallocate(avg_vals, r_mid_n, psin_mapped)
+        deallocate(PsiN_geom, Psi_list_geom, theta_list_geom, R_mat_geom, Z_mat_geom)
+        deallocate(Br_mat_geom, Bz_mat_geom, Bphi_mat_geom)
+        deallocate(R_flat_geom, Z_flat_geom, Br_flat_geom, Bz_flat_geom, Bphi_flat_geom)
 
         print *, ">>> com_dream complete <<<"
 

@@ -2,7 +2,7 @@ module mod_settings
 
 implicit none
 
-integer, parameter :: n_tor             = 3      !< number of toroidal harmonics
+integer, parameter :: n_tor             = 1      !< number of toroidal harmonics
 integer, parameter :: n_coord_tor       = 1      !< number of toroidal harmonics in (R, Z) coordinates
 integer, parameter :: l_pol_domm        = 0      !< highest poloidal mode in the Dommaschk potentials        
 integer, parameter :: n_period          = 1      !< periodicity in toroidal direction

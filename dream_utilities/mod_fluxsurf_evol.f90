@@ -27,6 +27,13 @@ contains
         integer :: s, n_psi, ifail
         real(kind=8), dimension(3) :: E, b, gradB, curlb, dbdt
         real(kind=8) :: normB
+        type(particle_gc_relativistic) :: particle_in, particle_out
+        real(kind=8) :: energy_eV, ksi
+        real(kind=8) :: mass   !< particle mass in AMU
+
+        energy_eV = 512.d3
+        ksi       = 0.999d0
+        mass      = 5.4857990907016d-4  !< electron mass in AMU
 
         n_psi = size(R_mat, 2)
 
@@ -43,35 +50,43 @@ contains
                         particles(s)%i_elm, &
                         particles(s)%st(1), particles(s)%st(2), ifail)
 
-            call sim%fields%calc_EBNormBGradBCurlbDbdt(sim%time, particles(s)%i_elm, &
-                        particles(s)%st, particles(s)%x(3), E, b, normB, gradB, curlb, dbdt)
 
             if (ifail /= 0) then
                 particles(s)%i_elm = -1
                 print *, "Warning: Particle at surface ", s, " failed localization."
+                cycle
             endif
+
+            call sim%fields%calc_EBNormBGradBCurlbDbdt(sim%time, particles(s)%i_elm, &
+                        particles(s)%st, particles(s)%x(3), E, b, normB, gradB, curlb, dbdt)
+
+            particle_in  = particles(s)
+            particle_out = relativistic_gc_momenta_from_E_cospitch( &
+                                particle_in, energy_eV, ksi, mass, sim%fields, sim%time)
+            particles(s)%p = particle_out%p
+
         end do
         print *, "Initialized ", n_psi, " particles (one per flux surface at theta=0)."
     end subroutine initialise_on_flux_surfaces
 
 
-    subroutine run_particle_trace(sim, particles, mass, timesteps, end_time)
+    subroutine run_particle_trace(sim, particles, mass, timesteps, start_time, end_time)
         type(particle_sim), intent(inout)              :: sim
         type(particle_gc_relativistic), intent(inout)  :: particles(:)
         real(kind=8), intent(in)                       :: mass
-        real(kind=8), intent(in)                       :: timesteps(:), end_time
+        real(kind=8), intent(in)                       :: timesteps(:), start_time, end_time
 
         real(kind=8)    :: local_time, t_step
         integer(kind=4) :: j, k, n_pushes, n_lost
 
         n_lost  = 0
         t_step  = timesteps(1)
-        n_pushes = ceiling((end_time - sim%time) / t_step)
+        n_pushes = ceiling((end_time - start_time) / t_step)
         print *, "Running particle trace for ", n_pushes, " pushes per particle"
 
         do j = 1, size(particles, 1)
             if (particles(j)%i_elm <= 0) cycle
-            local_time = sim%time
+            local_time = start_time
             do k = 1, n_pushes
                 call runge_kutta_fixed_dt_gc_push_jorek(sim%fields, local_time, t_step, mass, particles(j))
                 local_time = local_time + t_step
