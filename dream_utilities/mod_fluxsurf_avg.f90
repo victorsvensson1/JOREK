@@ -77,6 +77,7 @@ contains
     call add(expr_list, name_ne,    desc_ne)
     call add(expr_list, name_EdotB, desc_EdotB)
     call add(expr_list, name_B2,    desc_B2)
+    call add(expr_list, name_Zeff,  desc_Zeff)
     
     i_T     = 1
     i_ne    = 2
