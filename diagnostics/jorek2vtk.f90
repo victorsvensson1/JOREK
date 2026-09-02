@@ -22,6 +22,8 @@ use mod_impurity, only: init_imp_adas, radiation_function, radiation_function_li
 use mod_atomic_coeff_deuterium, only : atomic_coeff_deuterium
 use mod_openadas , only : read_adf11
 use mod_atomic_coeff_deuterium, only : ad_deuterium , atomic_coeff_deuterium
+use mod_dream_input, only: load_dream_output_from_file, interp_dream_jre, &
+                            dream_psin, dream_bmin, n_dream_psin
 implicit none
 
 type (type_node_list)   ,     pointer :: node_list
@@ -98,7 +100,9 @@ logical               :: without_n0_mode, SI_units
 logical               :: include_fluxes, include_neo, include_gvec_field, include_magnetic_field, include_vacuum_field
 logical               :: include_velocity_field, include_bootstrap, include_psi_norm, include_electric_field, include_Jpol, RphiZ_coords
 logical               :: include_projections, include_saw_ene
+logical               :: include_jre_dream   ! include j_re from a DREAM coupling sidecar file (interp_dream_jre, raw physical value)
 character*80          :: proj_basename, filename_proj
+character*256         :: dream_file          ! path to a 'dream_outputs/output_XXXXXX_jorek.h5' sidecar, matching this restart step
 real*8                :: toroidal_angle
 
 real*8                :: Er, psi_abs, Vtheta, Btheta, Mach_par,Mach_pol,Vsound, Vneo
@@ -117,7 +121,7 @@ real*8                :: r0_real8, rn0_real8, lnA
 real*8                :: T0_corr, r0_corr, rn0_corr, ne_JOREK, T_or_Te, T_or_Te_corr, T_or_Te_0 
 integer               :: i_imp, offset_bgimp, i_bg     ! Loop for more than one background impurity
 integer               :: i_proj
-integer               :: i_psin, i_test, iimp(6), i_ne, ineu(7), ibg_tot, i_pellet(2), i_flux(8), i_neo(10), i_boot(2), i_gvec(3), i_vac(3), i_saw
+integer               :: i_psin, i_jre, i_test, iimp(6), i_ne, ineu(7), ibg_tot, i_pellet(2), i_flux(8), i_neo(10), i_boot(2), i_gvec(3), i_vac(3), i_saw
 integer               :: i_full(11), i_vec_B, i_vec_V, i_vec_E, i_vec_Jpol, i_vec_gvec(3), i_vec_vac(2)
 integer, allocatable  :: iibg(:), iproj(:)
 character*36          :: imp_label, proj_label
@@ -165,7 +169,7 @@ real*8  :: Rp, Zp, Rmin, Rmax, Zmin, Zmax, s_out, t_out, R_out, Z_out
 namelist /vtk_params/ nsub, i_tor, i_plane, without_n0_mode, SI_units, &
                       include_fluxes, include_neo, include_gvec_field, include_magnetic_field, include_vacuum_field,&
                       include_velocity_field, include_bootstrap, include_psi_norm, include_electric_field, include_Jpol, RphiZ_coords,&
-                      include_projections, proj_basename
+                      include_projections, proj_basename, include_jre_dream, dream_file
 
 
 write(*,*) '***************************************'
@@ -218,6 +222,8 @@ include_psi_norm       = .true.  ! include normalized flux
 include_projections    = .false. ! include projections from particles
 proj_basename          = 'projections' ! basename for particle projection output files
 RphiZ_coords           = .false. ! use xyz transformation (R,0,Z) instead of (R,Z,0)
+include_jre_dream      = .false. ! include j_re interpolated from a DREAM coupling sidecar file
+dream_file              = ''      ! path to the 'dream_outputs/output_XXXXXX_jorek.h5' sidecar matching THIS restart step
 
 include_radiation    = .false. 
 include_neutral_dens = .false.
@@ -271,7 +277,29 @@ if (include_projections) then
   write(*,*) ' -proj_basename =', trim(proj_basename)
 end if
 
+write(*,*) 'include_jre_dream =', include_jre_dream
+if (include_jre_dream) then
+  write(*,*) ' -dream_file =', trim(dream_file)
+end if
+
 write(*,*) '-----------'
+
+! --- Load j_re/Bmin(psi_n) from the DREAM coupling sidecar file, if requested.
+! interp_dream_jre() returns 0 for every point when no data has been loaded
+! (n_dream_psin < 1), so leaving dream_file empty is safe -- it just yields
+! an all-zero j_re field rather than failing.
+if (include_jre_dream) then
+  if (len_trim(dream_file) == 0) then
+    write(*,*) 'WARNING: include_jre_dream=.true. but no dream_file given -- j_re will be zero everywhere.'
+  else
+    call load_dream_output_from_file(trim(dream_file), ierr)
+    if (ierr /= 0) then
+      write(*,*) 'WARNING: failed to load dream_file=', trim(dream_file), ' -- j_re will be zero everywhere.'
+    else
+      write(*,*) 'Loaded DREAM j_re/Bmin(psi_n) from ', trim(dream_file)
+    end if
+  end if
+end if
 write(*,*) 'n_tor           =', n_tor
 write(*,*) 'n_period        =', n_period
 write(*,*) 'F0              =', F0
@@ -357,6 +385,10 @@ endif
 
 if (include_psi_norm) then
   call add_vtk_entry('psi_norm    ', 'psi_norm    ',    i_psin, n_scalars, si_units, scalar_names)
+endif
+
+if (include_jre_dream) then
+  call add_vtk_entry('j_re        ', 'j_re_MA/m2  ',    i_jre,  n_scalars, si_units, scalar_names)
 endif
 
 if (include_gvec_field) then
@@ -983,6 +1015,13 @@ do i=1,element_list%n_elements
         scalars(inode,i_full(11))= (VR*BR + VZ*BZ + Vp*Bp)  / sqrt(BR**2 + BZ**2 + Bp**2)
 
         psi_norm = get_psi_n(A3, Z)
+
+        ! --- j_re from DREAM coupling (raw physical value, not the induction
+        ! equation's RHS term -- same call/convention as mod_elt_matrix_fft.f90's
+        ! "aux_jre = interp_dream_jre(psi_norm, sqrt(BB2), BigR, F0)")
+        if (include_jre_dream) then
+          scalars(inode,i_jre) = interp_dream_jre(psi_norm, sqrt(BR**2 + BZ**2 + Bp**2), R)
+        endif
 
         grad_psi = sqrt(A3_R**2 + A3_Z**2)
 
@@ -1717,7 +1756,14 @@ if (SI_units) then
     scalars(i,i_boot(1))=scalars(i,i_boot(1))/MU_zero*1.e-6
     scalars(i,i_boot(2))=scalars(i,i_boot(2))/MU_zero*1.e-6
     endif
-    if (include_velocity_field) then 
+    !============================================j_re (DREAM coupling) in MA/m2
+    ! interp_dream_jre() already returns a zj0-like normalized value (it applies
+    ! the same *MU_ZERO*R_local factor used to build zj0), so convert it back
+    ! to physical units exactly like var_zj is converted below.
+    if (include_jre_dream) then
+      scalars(i,i_jre) = scalars(i,i_jre) / MU_zero * 1.e-6
+    endif
+    if (include_velocity_field) then
       vectors(i,:,i_vec_V) = vectors(i,:,i_vec_V)/t_norm
     endif
     if (include_electric_field) then 
@@ -1734,6 +1780,13 @@ if (SI_units) then
     if (jorek_model .ge. 199) then
       !============================================j_phi in MA/m2
       scalars(i,var_zj) = currdens(i) / MU_zero * 1.e-6
+    endif
+    !============================================j_re (DREAM coupling) in MA/m2
+    ! interp_dream_jre() already returns a zj0-like normalized value (it applies
+    ! the same *MU_ZERO*R_local factor used to build zj0), so convert it back
+    ! to physical units exactly like var_zj just above.
+    if (include_jre_dream) then
+      scalars(i,i_jre) = scalars(i,i_jre) / MU_zero * 1.e-6
     endif
     !============================================density in 1e20m-3
     scalars(i,var_rho) = scalars(i,var_rho) * central_density
@@ -1966,6 +2019,5 @@ contains
 
 
 end program jorek2vtk
-
 
 
