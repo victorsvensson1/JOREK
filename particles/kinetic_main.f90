@@ -95,7 +95,7 @@ type(wall_act_group),         dimension(:), allocatable :: wall_act_groups
 type(type_neutral_collision), dimension(:), allocatable :: neutral_collisions
 
 ! for DREAM com
-integer, parameter :: N_DREAM_PSI_SURFACES = 15
+integer, parameter :: N_DREAM_PSI_SURFACES = 100
 
 
 !tmp
